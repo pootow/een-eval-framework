@@ -88,18 +88,24 @@ class ConfigValidator:
             
             if config.max_tokens < -1 or config.max_tokens == 0:
                 self.warnings.append(f"Model {i} ({config.name}): max_tokens should be -1 (unlimited) or positive")
-    
+
     def _validate_dataset(self, dataset) -> None:
         """Validate dataset."""
         if dataset is None:
             self.errors.append("Dataset is required")
             return
         
+        # Debug: check what type of object we have
+        print(f"DEBUG: Dataset type: {type(dataset)}")
+        print(f"DEBUG: Dataset attributes: {dir(dataset)}")
+        if hasattr(dataset, 'items'):
+            print(f"DEBUG: dataset.items type: {type(dataset.items)}")
+        
         if not hasattr(dataset, '__len__') or len(dataset) == 0:
             self.errors.append("Dataset is empty")
-        
+
         # Validate dataset items
-        if hasattr(dataset, 'items') and dataset.items:
+        if hasattr(dataset, 'items') and hasattr(dataset.items, '__len__') and len(dataset.items) > 0:
             sample_item = dataset.items[0]
             if not hasattr(sample_item, 'data'):
                 self.errors.append("Dataset items must have 'data' attribute")

@@ -82,23 +82,14 @@ class EvaluationEngine:
         
         self.logger.info("Evaluation completed successfully")
         return final_results
-    
+
     def _load_inference_results(self) -> List[Dict[str, Any]]:
         """Load inference results from output directory."""
-        inference_file = Path(self.output_manager.output_dir) / "inference_results.jsonl"
+        # Use the OutputManager's load_responses method which reads from responses.jsonl
+        results = self.output_manager.load_responses()
         
-        if not inference_file.exists():
-            return []
-        
-        results = []
-        try:
-            with open(inference_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        results.append(json.loads(line))
-        except Exception as e:
-            self.logger.error(f"Error loading inference results: {e}")
+        if not results:
+            self.logger.warning("No inference results found in responses file")
             return []
         
         self.logger.info(f"Loaded {len(results)} inference results")
@@ -121,20 +112,32 @@ class EvaluationEngine:
                 
                 eval_result = result.copy()
                 eval_result["evaluations"] = {}
-                
+
                 # Apply each evaluation method
                 for method in self.evaluation_methods:
                     try:
-                        # Extract expected output from the result
-                        expected = result.get("expected_output", result.get("ground_truth", ""))
-                        generated = result.get("generated_output", "")
+                        # Extract response and ground truth from the result
+                        response = result.get("response", result.get("generated_output", ""))
+                        ground_truth = result.get("ground_truth", {})
                         
                         # Apply evaluation method
-                        evaluation_score = method.evaluate(generated, expected, result)
-                        eval_result["evaluations"][method.name] = {
-                            "score": evaluation_score,
-                            "method": method.name
-                        }
+                        evaluation_result = method.evaluate(response, ground_truth, sample_data=result)
+                        
+                        # Handle different return types from evaluation methods
+                        if hasattr(evaluation_result, 'score'):
+                            # EvaluationResult object
+                            eval_result["evaluations"][method.name] = {
+                                "score": evaluation_result.score,
+                                "passed": evaluation_result.passed,
+                                "method": method.name,
+                                "details": evaluation_result.details
+                            }
+                        else:
+                            # Direct score value (for backward compatibility)
+                            eval_result["evaluations"][method.name] = {
+                                "score": evaluation_result,
+                                "method": method.name
+                            }
                         
                     except Exception as e:
                         self.logger.warning(f"Error applying method {method.name} to sample {idx}: {e}")
@@ -176,12 +179,17 @@ class EvaluationEngine:
                 if not scores:
                     self.logger.warning(f"No valid scores for {model_name}.{method_name}")
                     continue
-                
+
                 # Apply each metric
                 for metric in self.metrics:
                     try:
-                        metric_value = metric.compute(scores, evaluation_results)
-                        metrics_results[model_name][method_name][metric.name] = metric_value
+                        metric_result = metric.calculate(method_results)
+                        if hasattr(metric_result, 'value'):
+                            # MetricResult object
+                            metrics_results[model_name][method_name][metric.name] = metric_result.value
+                        else:
+                            # Direct value
+                            metrics_results[model_name][method_name][metric.name] = metric_result
                     except Exception as e:
                         self.logger.warning(f"Error computing metric {metric.name}: {e}")
                         metrics_results[model_name][method_name][metric.name] = None

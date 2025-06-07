@@ -299,11 +299,18 @@ class EvalWorkflow:
                 self._models.append(Model.from_config(model))
             else:
                 self._models.append(model)
-    
-    def _set_dataset(self, dataset: Union[str, Dataset]) -> None:
+
+    def _set_dataset(self, dataset: Union[str, Dataset, Dict[str, Any]]) -> None:
         """Set dataset for evaluation."""
         if isinstance(dataset, str):
             self._dataset = Dataset.from_file(dataset)
+        elif isinstance(dataset, dict):
+            # Handle dataset configuration from config files
+            if "file_path" in dataset:
+                self._dataset = Dataset.from_file(dataset["file_path"])
+            else:
+                # Create dataset from dictionary data
+                self._dataset = Dataset.from_dict(dataset)
         else:
             self._dataset = dataset
     

@@ -19,6 +19,7 @@ class ModelType(Enum):
     OPENAI = "openai"
     VLLM = "vllm"
     HUGGINGFACE = "huggingface"
+    MOCK = "mock"
 
 
 @dataclass
@@ -267,6 +268,12 @@ class VLLMModel(ModelInterface):
         }
         
         docker_params = {**default_params, **self.config.docker_params}
+
+        # Validate required parameters
+        if not self.config.model_path:
+            raise ValueError("model_path is required for VLLM models")
+        if not self.config.docker_image:
+            raise ValueError("docker_image is required for VLLM models")
         
         self.docker_container_id = docker_manager.start_vllm_container(
             model_path=self.config.model_path,
@@ -307,7 +314,7 @@ class VLLMModel(ModelInterface):
     def _wait_for_server(self, max_wait: int = 300) -> None:
         """Wait for VLLM server to be ready."""
         import time
-        
+
         start_time = time.time()
         while time.time() - start_time < max_wait:
             if self.is_available():
@@ -317,13 +324,68 @@ class VLLMModel(ModelInterface):
         raise RuntimeError(f"VLLM server failed to start within {max_wait} seconds")
 
 
+class MockModel(ModelInterface):
+    """Mock model implementation for testing purposes."""
+    
+    def __init__(self, config: ModelConfig):
+        super().__init__(config)
+        self.call_count = 0
+        self.responses = [
+            "This is a mock response for testing purposes.",
+            "Another mock response to simulate model behavior.",
+            "Mock models are useful for testing the evaluation framework.",
+            "Testing with mock models ensures reproducible results.",
+            "The framework supports various model types including mocks."
+        ]
+    
+    def generate(self, prompt: str, **kwargs) -> InferenceResult:
+        """Generate mock response."""
+        start_time = time.time()
+        
+        # Cycle through predefined responses
+        response = self.responses[self.call_count % len(self.responses)]
+        self.call_count += 1
+        
+        # Simulate some processing time
+        time.sleep(0.1)
+        end_time = time.time()
+        
+        inference_time = end_time - start_time
+        mock_tokens = len(response.split()) + len(prompt.split())
+        tokens_per_second = mock_tokens / inference_time if inference_time > 0 else 0
+        
+        return InferenceResult(
+            response=response,
+            prompt=prompt,
+            inference_time=inference_time,
+            tokens_per_second=tokens_per_second,
+            model_name=self.config.name,
+            total_tokens=mock_tokens,
+            prompt_tokens=len(prompt.split()),
+            completion_tokens=len(response.split()),
+            metadata={"mock": True, "call_count": self.call_count}
+        )
+    
+    def is_available(self) -> bool:
+        """Mock model is always available."""
+        return True
+    
+    def startup(self) -> None:
+        """No startup needed for mock model."""
+        pass
+    
+    def shutdown(self) -> None:
+        """No shutdown needed for mock model."""
+        pass
+
+
 class Model:
     """High-level model wrapper."""
     
     def __init__(self, interface: ModelInterface):
         self.interface = interface
         self.config = interface.config
-    
+
     @classmethod
     def from_config(cls, config: ModelConfig) -> "Model":
         """Create model from configuration."""
@@ -331,6 +393,8 @@ class Model:
             interface = OpenAIModel(config)
         elif config.type == ModelType.VLLM:
             interface = VLLMModel(config)
+        elif config.type == ModelType.MOCK:
+            interface = MockModel(config)
         else:
             raise ValueError(f"Unsupported model type: {config.type}")
         
