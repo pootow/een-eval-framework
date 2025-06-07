@@ -1,0 +1,106 @@
+# VLLM configuration for local model evaluation
+# This example shows how to use local models with VLLM and Docker
+
+dataset:
+  file_path: "data/coding_eval.jsonl"
+  input_field: "problem"
+  expected_output_field: "solution"
+  sample_size: 100
+  # Optional filtering and preprocessing
+  filter_condition: 'difficulty == "medium"'
+  preprocessing:
+    - type: "map_field"
+      source: "problem_description"
+      target: "problem"
+
+models:
+  - name: "llama2-7b"
+    type: "vllm"
+    config:
+      model: "meta-llama/Llama-2-7b-chat-hf"
+      temperature: 0.0
+      max_tokens: 1024
+      docker_image: "vllm/vllm-openai:latest"
+      gpu_count: 1
+      port: 8000
+      docker_volumes:
+        - "/path/to/models:/models"
+      docker_env:
+        CUDA_VISIBLE_DEVICES: "0"
+  
+  - name: "codellama-13b"
+    type: "vllm"
+    config:
+      model: "codellama/CodeLlama-13b-Instruct-hf"
+      temperature: 0.1
+      max_tokens: 2048
+      docker_image: "vllm/vllm-openai:latest"
+      gpu_count: 2
+      port: 8001
+
+evaluation_methods:
+  - name: "exact_match"
+    type: "exact_match"
+  
+  - name: "code_execution"
+    type: "custom"
+    function: "custom_evaluators.execute_code"
+    config:
+      timeout: 10
+      safe_mode: true
+  
+  - name: "json_structure"
+    type: "json_match"
+    config:
+      required_keys: ["code", "explanation"]
+      strict: false
+  
+  - name: "regex_pattern"
+    type: "regex_match"
+    config:
+      pattern: "def\\s+\\w+\\s*\\("
+      flags: ["IGNORECASE"]
+
+metrics:
+  - name: "pass_rate"
+    type: "pass_rate"
+  
+  - name: "execution_success"
+    type: "custom"
+    function: "custom_metrics.execution_rate"
+  
+  - name: "mean_score"
+    type: "mean"
+  
+  - name: "pass_at_5"
+    type: "pass_at_k"
+    config:
+      k: 5
+  
+  - name: "score_distribution"
+    type: "percentile"
+    config:
+      percentiles: [25, 50, 75, 90, 95]
+
+inference:
+  batch_size: 8
+  max_parallel: 4
+  timeout: 60
+  retry_attempts: 3
+
+output:
+  directory: "results/vllm_evaluation"
+  save_predictions: true
+  save_evaluations: true
+  save_intermediate: true
+  save_raw_responses: true
+
+# Optional: Custom evaluation functions
+custom_functions:
+  - name: "execute_code"
+    module: "custom_evaluators"
+    description: "Execute Python code and check output"
+  
+  - name: "execution_rate"
+    module: "custom_metrics" 
+    description: "Calculate successful execution rate"

@@ -1,0 +1,63 @@
+# Basic evaluation configuration for een_eval framework
+# This example shows a simple setup using OpenAI's API
+
+dataset:
+  file_path: "data/eval_dataset.jsonl"
+  input_field: "prompt"
+  expected_output_field: "expected_response"
+  # Optional: limit sample size for testing
+  # sample_size: 50
+
+models:
+  - name: "gpt-4"
+    type: "openai"
+    config:
+      model: "gpt-4"
+      temperature: 0.0
+      max_tokens: 512
+      # Add your API key via environment variable: OPENAI_API_KEY
+  
+  - name: "gpt-3.5-turbo"
+    type: "openai"
+    config:
+      model: "gpt-3.5-turbo"
+      temperature: 0.0
+      max_tokens: 512
+
+evaluation_methods:
+  - name: "exact_match"
+    type: "exact_match"
+  
+  - name: "contains_check"
+    type: "contains"
+    config:
+      case_sensitive: false
+  
+  - name: "length_check"
+    type: "length_check"
+    config:
+      min_length: 10
+      max_length: 1000
+
+metrics:
+  - name: "pass_rate"
+    type: "pass_rate"
+  
+  - name: "mean_score"
+    type: "mean"
+  
+  - name: "pass_at_1"
+    type: "pass_at_k"
+    config:
+      k: 1
+
+inference:
+  batch_size: 4
+  max_parallel: 2
+  timeout: 30
+
+output:
+  directory: "results"
+  save_predictions: true
+  save_evaluations: true
+  save_intermediate: true
