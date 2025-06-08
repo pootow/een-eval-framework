@@ -213,6 +213,7 @@ class InferenceEngine:
         batch_results = []
         
         for item in batch:
+            prompt = ""
             try:
                 # Process prompt
                 prompt = self.prompt_processor.process_prompt(item)
@@ -245,7 +246,7 @@ class InferenceEngine:
                 error_result = {
                     "item_id": item.id,
                     "model_name": model.name,
-                    "prompt": "",
+                    "prompt": prompt,
                     "response": "",
                     "inference_time": 0,
                     "tokens_per_second": 0,
