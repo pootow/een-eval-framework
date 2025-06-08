@@ -17,7 +17,7 @@ from ..core.models import Model, ModelConfig
 from ..core.evaluation import EvaluationMethod, BuiltInEvaluationMethod
 from ..core.metrics import Metric, BuiltInMetric
 from ..core.dataset import Dataset
-from ..workflow.config import Config
+from ..workflow.config import Config, EvaluationMethodConfig, MetricConfig
 from ..workflow.inference import InferenceEngine
 from ..workflow.evaluation import EvaluationEngine
 from ..utils.io import OutputManager
@@ -314,21 +314,25 @@ class EvalWorkflow:
         else:
             self._dataset = dataset
     
-    def _set_evaluation_methods(self, methods: List[Union[str, EvaluationMethod]]) -> None:
+    def _set_evaluation_methods(self, methods: List[Union[str, EvaluationMethod, EvaluationMethodConfig]]) -> None:
         """Set evaluation methods."""
         self._evaluation_methods = []
         for method in methods:
             if isinstance(method, str):
                 self._evaluation_methods.append(BuiltInEvaluationMethod.create(method))
+            elif isinstance(method, EvaluationMethodConfig):
+                self._evaluation_methods.append(EvaluationMethod.from_config(method))
             else:
                 self._evaluation_methods.append(method)
-    
-    def _set_metrics(self, metrics: List[Union[str, Metric]]) -> None:
+
+    def _set_metrics(self, metrics: List[Union[str, Metric, MetricConfig]]) -> None:
         """Set metrics."""
         self._metrics = []
         for metric in metrics:
             if isinstance(metric, str):
                 self._metrics.append(BuiltInMetric.create(metric))
+            elif isinstance(metric, MetricConfig):
+                self._metrics.append(Metric.from_config(metric))
             else:
                 self._metrics.append(metric)
     

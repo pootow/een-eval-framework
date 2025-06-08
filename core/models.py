@@ -326,17 +326,21 @@ class VLLMModel(ModelInterface):
 
 class MockModel(ModelInterface):
     """Mock model implementation for testing purposes."""
-    
+
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self.call_count = 0
-        self.responses = [
-            "This is a mock response for testing purposes.",
-            "Another mock response to simulate model behavior.",
-            "Mock models are useful for testing the evaluation framework.",
-            "Testing with mock models ensures reproducible results.",
-            "The framework supports various model types including mocks."
-        ]
+        # Use mock_responses from config if available, otherwise use defaults
+        if hasattr(config, 'extra_params') and config.extra_params and 'mock_responses' in config.extra_params:
+            self.responses = config.extra_params['mock_responses']
+        else:
+            self.responses = [
+                "This is a mock response for testing purposes.",
+                "Another mock response to simulate model behavior.",
+                "Mock models are useful for testing the evaluation framework.",
+                "Testing with mock models ensures reproducible results.",
+                "The framework supports various model types including mocks."
+            ]
     
     def generate(self, prompt: str, **kwargs) -> InferenceResult:
         """Generate mock response."""

@@ -94,13 +94,7 @@ class ConfigValidator:
         if dataset is None:
             self.errors.append("Dataset is required")
             return
-        
-        # Debug: check what type of object we have
-        print(f"DEBUG: Dataset type: {type(dataset)}")
-        print(f"DEBUG: Dataset attributes: {dir(dataset)}")
-        if hasattr(dataset, 'items'):
-            print(f"DEBUG: dataset.items type: {type(dataset.items)}")
-        
+
         if not hasattr(dataset, '__len__') or len(dataset) == 0:
             self.errors.append("Dataset is empty")
 

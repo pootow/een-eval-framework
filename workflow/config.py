@@ -21,6 +21,7 @@ class EvaluationMethodConfig:
     name: str
     type: str = "built_in"  # "built_in" or "custom"
     path: Optional[str] = None
+    module: Optional[str] = None
     function_name: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
     
@@ -30,6 +31,7 @@ class EvaluationMethodConfig:
             name=data["name"],
             type=data.get("type", "built_in"),
             path=data.get("path"),
+            module=data.get("module"),
             function_name=data.get("function_name"),
             params=data.get("params", {})
         )
@@ -41,6 +43,7 @@ class MetricConfig:
     name: str
     type: str = "built_in"  # "built_in" or "custom"
     path: Optional[str] = None
+    module: Optional[str] = None
     function_name: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
     
@@ -50,6 +53,7 @@ class MetricConfig:
             name=data["name"],
             type=data.get("type", "built_in"),
             path=data.get("path"),
+            module=data.get("module"),
             function_name=data.get("function_name"),
             params=data.get("params", {})
         )
@@ -149,10 +153,13 @@ class Config:
                     config.metrics.append(MetricConfig(name=metric_data))
                 else:
                     config.metrics.append(MetricConfig.from_dict(metric_data))
-        
+
         # Load other parameters
         config.sample_params = data.get("sample_params", {})
-        config.eval_prompt_template = data.get("eval_prompt_template")
+        
+        # Handle prompt template - support both inline and file-based templates
+        config.eval_prompt_template = cls._load_prompt_template(data)
+        
         config.mode = data.get("mode", "inference")
         config.batch_size = data.get("batch_size", 1)
         config.max_workers = data.get("max_workers", 4)
@@ -341,3 +348,54 @@ class Config:
             handlers=handlers,
             force=True
         )
+    
+    @staticmethod
+    def _load_prompt_template(data: Dict[str, Any]) -> Optional[str]:
+        """Load prompt template from configuration data.
+        
+        Supports both inline templates and file-based templates.
+        Handles the following formats:
+        - eval_prompt_template: "inline content"
+        - prompt_template: "inline content"  
+        - prompt_template: "path/to/file.md"
+        - prompt_template: {path: "path/to/file.md"}
+        """
+        # First check for eval_prompt_template (direct inline)
+        if "eval_prompt_template" in data:
+            return data["eval_prompt_template"]
+        
+        # Then check for prompt_template
+        if "prompt_template" not in data:
+            return None
+            
+        prompt_template = data["prompt_template"]
+        
+        # Handle different prompt_template formats
+        if isinstance(prompt_template, str):
+            # Could be inline content or a file path
+            if os.path.exists(prompt_template):
+                # It's a file path
+                try:
+                    with open(prompt_template, 'r', encoding='utf-8') as f:
+                        return f.read()
+                except Exception as e:
+                    raise ValueError(f"Failed to read prompt template file '{prompt_template}': {e}")
+            else:
+                # It's inline content
+                return prompt_template
+                
+        elif isinstance(prompt_template, dict):
+            # Handle {path: "filename"} format
+            if "path" in prompt_template:
+                file_path = prompt_template["path"]
+                if not os.path.exists(file_path):
+                    raise FileNotFoundError(f"Prompt template file not found: {file_path}")
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        return f.read()
+                except Exception as e:
+                    raise ValueError(f"Failed to read prompt template file '{file_path}': {e}")
+            else:
+                raise ValueError("prompt_template dict must contain a 'path' key")
+        else:
+            raise ValueError(f"prompt_template must be a string or dict, got {type(prompt_template)}")

@@ -14,6 +14,8 @@ import re
 import json
 from pathlib import Path
 
+from een_eval.workflow.config import EvaluationMethodConfig
+
 
 @dataclass
 class EvaluationResult:
@@ -68,7 +70,7 @@ class EvaluationMethod(ABC):
     ) -> "EvaluationMethod":
         """Create evaluation method from function."""
         return CustomEvaluationMethod(name, function, **params)
-    
+
     @classmethod
     def from_file(
         cls, 
@@ -80,6 +82,30 @@ class EvaluationMethod(ABC):
         """Create evaluation method from external file."""
         function = _load_function_from_file(file_path, function_name or name)
         return cls.from_function(name, function, **params)
+    
+    @classmethod
+    def from_config(cls, config: EvaluationMethodConfig) -> "EvaluationMethod":
+        """Create evaluation method from configuration object."""
+        print(f"DEBUG: Creating evaluation method from config: {config}")
+        if config.type == "built_in":
+            return BuiltInEvaluationMethod.create(config.name, **config.params)
+        elif config.type == "custom":
+            if config.path:
+                # File-based custom evaluation method
+                return cls.from_file(config.name, config.path, config.function_name, **config.params)
+            elif hasattr(config, 'module') and hasattr(config, 'function_name'):
+                # Module-based custom evaluation method  
+                try:
+                    import importlib
+                    module = importlib.import_module(config.module)
+                    function = getattr(module, config.function_name)
+                    return cls.from_function(config.name, function, **config.params)
+                except (ImportError, AttributeError) as e:
+                    raise ValueError(f"Could not load function {config.function_name} from module {config.module}: {e}")
+            else:
+                raise ValueError("Custom evaluation method requires either 'path' or 'module'+'function_name'")
+        else:
+            raise ValueError(f"Unknown evaluation method type: {config.type}")
 
 
 class CustomEvaluationMethod(EvaluationMethod):

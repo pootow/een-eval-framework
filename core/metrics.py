@@ -14,6 +14,8 @@ import importlib.util
 from pathlib import Path
 from collections import defaultdict
 
+from een_eval.workflow.config import MetricConfig
+
 
 @dataclass
 class MetricResult:
@@ -76,6 +78,29 @@ class Metric(ABC):
         """Create metric from external file."""
         function = _load_function_from_file(file_path, function_name or name)
         return cls.from_function(name, function, **params)
+
+    @classmethod
+    def from_config(cls, config: MetricConfig) -> "Metric":
+        """Create metric from configuration object."""
+        if config.type == "built_in":
+            return BuiltInMetric.create(config.name, **config.params)
+        elif config.type == "custom":
+            if config.path:
+                # File-based custom metric
+                return cls.from_file(config.name, config.path, config.function_name, **config.params)
+            elif hasattr(config, 'module') and hasattr(config, 'function_name'):
+                # Module-based custom metric
+                try:
+                    import importlib
+                    module = importlib.import_module(config.module)
+                    function = getattr(module, config.function_name)
+                    return cls.from_function(config.name, function, **config.params)
+                except (ImportError, AttributeError) as e:
+                    raise ValueError(f"Could not load function {config.function_name} from module {config.module}: {e}")
+            else:
+                raise ValueError("Custom metric requires either 'path' or 'module'+'function_name'")
+        else:
+            raise ValueError(f"Unknown metric type: {config.type}")
 
 
 class CustomMetric(Metric):
