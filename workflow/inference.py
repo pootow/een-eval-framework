@@ -56,7 +56,7 @@ class PromptProcessor:
 
 class InferenceEngine:
     """Handles model inference execution."""
-    
+
     def __init__(
         self,
         models: List[Model],
@@ -70,6 +70,7 @@ class InferenceEngine:
         self.models = models
         self.dataset = dataset
         self.sample_params = sample_params
+        self.num_samples = sample_params.get('num_samples', 1)  # Extract num_samples
         self.prompt_processor = PromptProcessor(prompt_template)
         self.output_manager = output_manager
         self.batch_size = batch_size
@@ -78,7 +79,7 @@ class InferenceEngine:
         
         # State tracking
         self.completed_samples = 0
-        self.total_samples = len(dataset) * len(models)
+        self.total_samples = len(dataset) * len(models) * self.num_samples
         self.start_time: Optional[float] = None
     
     def run(self, status) -> Dict[str, Any]:
@@ -152,8 +153,7 @@ class InferenceEngine:
         self, 
         model: Model, 
         batches: List[List[DatasetItem]], 
-        status
-    ) -> List[Dict[str, Any]]:
+        status    ) -> List[Dict[str, Any]]:
         """Run inference sequentially."""
         results = []
         
@@ -162,7 +162,7 @@ class InferenceEngine:
             results.extend(batch_results)
             
             # Update status and save intermediate results
-            self.completed_samples += len(batch)
+            self.completed_samples += len(batch) * self.num_samples
             status.processed_samples = self.completed_samples
             
             if self.output_manager:
@@ -193,9 +193,9 @@ class InferenceEngine:
                 try:
                     batch_results = future.result()
                     results.extend(batch_results)
-                    
+
                     # Update status and save intermediate results
-                    self.completed_samples += len(batch)
+                    self.completed_samples += len(batch) * self.num_samples
                     status.processed_samples = self.completed_samples
                     
                     if self.output_manager:
@@ -207,54 +207,64 @@ class InferenceEngine:
                     status.errors.append(f"Batch processing: {e}")
         
         return results
-    
+
     def _process_batch(self, model: Model, batch: List[DatasetItem]) -> List[Dict[str, Any]]:
         """Process a single batch of items."""
         batch_results = []
         
         for item in batch:
-            prompt = ""
-            try:
-                # Process prompt
-                prompt = self.prompt_processor.process_prompt(item)
-                
-                # Generate response
-                inference_result = model.generate(prompt, **self.sample_params)
-                
-                # Create result record
-                result_data = {
-                    "item_id": item.id,
-                    "model_name": model.name,
-                    "prompt": prompt,
-                    "response": inference_result.response,
-                    "inference_time": inference_result.inference_time,
-                    "tokens_per_second": inference_result.tokens_per_second,
-                    "total_tokens": inference_result.total_tokens,
-                    "prompt_tokens": inference_result.prompt_tokens,
-                    "completion_tokens": inference_result.completion_tokens,
-                    "timestamp": time.time(),
-                    "sample_params": self.sample_params,
-                    "metadata": inference_result.metadata,
-                    "ground_truth": item.data
-                }
-                
-                batch_results.append(result_data)
-                
-            except Exception as e:
-                self.logger.error(f"Failed to process item {item.id}: {e}")
-                # Create error record
-                error_result = {
-                    "item_id": item.id,
-                    "model_name": model.name,
-                    "prompt": prompt,
-                    "response": "",
-                    "inference_time": 0,
-                    "tokens_per_second": 0,
-                    "error": str(e),
-                    "timestamp": time.time(),
-                    "ground_truth": item.data
-                }
-                batch_results.append(error_result)
+            # Generate multiple samples for each item
+            for sample_idx in range(self.num_samples):
+                prompt = ""
+                try:
+                    # Process prompt
+                    prompt = self.prompt_processor.process_prompt(item)
+                    
+                    # Generate response
+                    inference_result = model.generate(prompt, **self.sample_params)
+                    
+                    # Create result record with sample tracking
+                    result_data = {
+                        "item_id": item.id,
+                        "sample_id": f"{item.id}_sample_{sample_idx}",
+                        "sample_index": sample_idx,
+                        "total_samples": self.num_samples,
+                        "model_name": model.name,
+                        "prompt": prompt,
+                        "response": inference_result.response,
+                        "inference_time": inference_result.inference_time,
+                        "tokens_per_second": inference_result.tokens_per_second,
+                        "total_tokens": inference_result.total_tokens,
+                        "prompt_tokens": inference_result.prompt_tokens,
+                        "completion_tokens": inference_result.completion_tokens,
+                        "timestamp": time.time(),
+                        "sample_params": self.sample_params,
+                        "metadata": inference_result.metadata,
+                        "ground_truth": item.data
+                    }
+                    
+                    batch_results.append(result_data)
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")
+                    # Create error record
+                    error_result = {
+                        "item_id": item.id,
+                        "sample_id": f"{item.id}_sample_{sample_idx}",
+                        "sample_index": sample_idx,
+                        "total_samples": self.num_samples,
+                        "model_name": model.name,
+                        "prompt": prompt,
+                        "response": "",
+                        "inference_time": 0,
+                        "tokens_per_second": 0,
+                        "error": str(e),
+                        "timestamp": time.time(),
+                        "ground_truth": item.data
+                    }
+                    batch_results.append(error_result)
+        
+        return batch_results
         
         return batch_results
     

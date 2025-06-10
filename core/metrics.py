@@ -180,25 +180,25 @@ class PassAtKMetric(Metric):
         super().__init__(f"pass_at_{k}", **params)
         self.k = k
         self.num_samples = num_samples
-    
+
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
         **kwargs
     ) -> MetricResult:
         """Calculate Pass@K metric."""
-        # Group results by problem
-        problems = defaultdict(list)
+        # Group results by item_id (original dataset item)
+        item_groups = defaultdict(list)
         for result in evaluation_results:
-            problem_id = result.get("problem_id", "default")
-            problems[problem_id].append(result)
+            item_id = result.get("item_id", "unknown")
+            item_groups[item_id].append(result)
         
         pass_at_k_scores = []
         
-        for problem_id, problem_results in problems.items():
-            # Count passed samples for this problem
-            passed_count = sum(1 for r in problem_results if r.get("passed", False))
-            total_samples = len(problem_results)
+        for item_id, item_results in item_groups.items():
+            # Count passed samples for this item
+            passed_count = sum(1 for r in item_results if r.get("passed", False))
+            total_samples = len(item_results)
             
             if total_samples < self.k:
                 # Not enough samples, use what we have
@@ -206,8 +206,8 @@ class PassAtKMetric(Metric):
             else:
                 k_effective = self.k
             
-            # Calculate pass@k using combinatorial formula
-            if passed_count >= k_effective:
+            # Calculate pass@k: if at least one sample passes, then pass@k = 1
+            if passed_count >= 1:
                 pass_at_k = 1.0
             else:
                 pass_at_k = 0.0
@@ -221,9 +221,10 @@ class PassAtKMetric(Metric):
             value=mean_pass_at_k,
             metadata={
                 "k": self.k,
-                "num_problems": len(problems),
+                "num_items": len(item_groups),
                 "total_samples": len(evaluation_results),
-                "individual_scores": pass_at_k_scores
+                "individual_scores": pass_at_k_scores,
+                "samples_per_item": len(evaluation_results) // len(item_groups) if item_groups else 0
             }
         )
 

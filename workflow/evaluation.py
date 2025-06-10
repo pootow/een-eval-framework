@@ -196,27 +196,38 @@ class EvaluationEngine:
         
         return metrics_results
     
+    def _group_samples_by_item(
+        self, 
+        results: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Group evaluation results by original dataset item."""
+        from collections import defaultdict
+        
+        item_groups = defaultdict(list)
+        
+        for result in results:
+            item_id = result.get("item_id", "unknown")
+            item_groups[item_id].append(result)
+        
+        return dict(item_groups)
+
     def _group_results_by_model_and_method(
         self, 
         evaluation_results: List[Dict[str, Any]]
     ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
-        """Group evaluation results by model and evaluation method."""
-        grouped = {}
+        """Group results by model and evaluation method, preserving item grouping."""
+        from collections import defaultdict
+        
+        grouped = defaultdict(lambda: defaultdict(list))
         
         for result in evaluation_results:
             model_name = result.get("model_name", "unknown")
+            method_name = result.get("evaluation_method", "unknown")
             
-            if model_name not in grouped:
-                grouped[model_name] = {}
-            
-            evaluations = result.get("evaluations", {})
-            for method_name, eval_data in evaluations.items():
-                if method_name not in grouped[model_name]:
-                    grouped[model_name][method_name] = []
-                
-                grouped[model_name][method_name].append(eval_data)
+            # Preserve sample grouping information
+            grouped[model_name][method_name].append(result)
         
-        return grouped
+        return dict(grouped)
     
     def _save_results(self, results: Dict[str, Any]) -> None:
         """Save evaluation results to output directory."""
