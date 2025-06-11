@@ -45,6 +45,7 @@ class MetricConfig:
     path: Optional[str] = None
     module: Optional[str] = None
     function_name: Optional[str] = None
+    facets: List[str] = field(default_factory=list)  # Added facets support
     params: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
@@ -55,6 +56,7 @@ class MetricConfig:
             path=data.get("path"),
             module=data.get("module"),
             function_name=data.get("function_name"),
+            facets=data.get("facets", []),
             params=data.get("params", {})
         )
 
@@ -118,14 +120,18 @@ class Config:
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
         """Create configuration from dictionary."""
         config = cls()
-        
+
         # Load models
         if "models" in data:
             config.models = []
             for model_data in data["models"]:
                 if isinstance(model_data, str):
-                    # Simple model name
-                    config.models.append(ModelConfig(name=model_data, type=ModelType.OPENAI))
+                    # Simple model name - default to local model at localhost:1234
+                    config.models.append(ModelConfig(
+                        name=model_data, 
+                        type=ModelType.OPENAI,
+                        endpoint="http://localhost:1234/v1"
+                    ))
                 else:
                     config.models.append(ModelConfig.from_dict(model_data))
         

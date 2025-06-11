@@ -403,11 +403,16 @@ class Model:
             raise ValueError(f"Unsupported model type: {config.type}")
         
         return cls(interface)
-    
+
     @classmethod
     def from_name(cls, name: str) -> "Model":
-        """Create model from name (assumes OpenAI)."""
-        config = ModelConfig(name=name, type=ModelType.OPENAI)
+        """Create model from name (defaults to local OpenAI compatible model at localhost:1234)."""
+        config = ModelConfig(
+            name=name, 
+            type=ModelType.OPENAI,
+            api_key="dummy_api_key_for_local_model",
+            endpoint="http://localhost:1234/v1"
+        )
         return cls.from_config(config)
     
     @classmethod
@@ -445,3 +450,42 @@ class Model:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.shutdown()
+
+
+def create_model(model_input: Union[str, ModelConfig, Model, Dict[str, Any]]) -> Model:
+    """
+    Create a Model instance from various input types.
+    
+    Args:
+        model_input: Can be:
+            - str: Model name (defaults to local VLLM at localhost:1234)
+            - ModelConfig: Model configuration object
+            - Model: Returns as-is
+            - Dict: Model configuration dictionary
+    
+    Returns:
+        Model instance
+    """
+    if isinstance(model_input, Model):
+        return model_input
+    elif isinstance(model_input, str):
+        return Model.from_name(model_input)
+    elif isinstance(model_input, ModelConfig):
+        return Model.from_config(model_input)
+    elif isinstance(model_input, dict):
+        return Model.from_dict(model_input)
+    else:
+        raise ValueError(f"Unsupported model input type: {type(model_input)}")
+
+
+def create_models(models_input: List[Union[str, ModelConfig, Model, Dict[str, Any]]]) -> List[Model]:
+    """
+    Create Model instances from list of various input types.
+    
+    Args:
+        models_input: List of model specifications
+    
+    Returns:
+        List of Model instances
+    """
+    return [create_model(model_input) for model_input in models_input]

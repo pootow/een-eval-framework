@@ -1,0 +1,80 @@
+# Updated configuration example matching README.md specification
+
+# Simple model configuration - just names default to localhost:1234
+models:
+  - "deepseek-v3"
+  - "claude-3.5-sonnet"
+
+# Or with full configuration
+# models:
+#   - name: "gpt-4"
+#     type: "openai"
+#     endpoint: "https://api.openai.com/v1"
+#     api_key: "${OPENAI_API_KEY}"
+#   - name: "local-model"
+#     type: "openai"
+#     endpoint: "http://localhost:1234/v1"
+
+dataset: "datasets/qc_problems.jsonl"
+
+sample_params:
+  temperature: 0.1
+  max_tokens: 1024
+  num_samples: 16  # Key parameter for pass@k metrics
+
+eval_prompt_template: "Problem: {{ problem }}\nConstraints: {{ constraints }}\nSolution:"
+
+evaluation_methods:
+  # Built-in evaluation methods
+  - name: "exact_match"
+    type: "exact_match"
+    params:
+      response_field: "generated_text"
+      ground_truth_field: "expected_output"
+
+  # Custom evaluation method
+  - name: "evaluate_code_correctness"
+    type: "custom"
+    path: "code_quality.py"
+    function_name: "evaluate_code_correctness"
+
+metrics:
+  # Built-in metrics with facets
+  - name: "pass@1"
+    type: "pass_at_k"
+    facets:
+      - metadata.model_id
+      - prompt_template
+    params:
+      k: 1
+      num_samples: 16
+      aggregation: "mean"
+
+  - name: "pass@16"
+    type: "pass_at_k"
+    facets:
+      - metadata.model_id
+    params:
+      k: 16
+      num_samples: 16
+
+  - name: "avg_score"
+    type: "mean"
+    facets:
+      - metadata.model_id
+
+  # Custom metrics
+  - name: "complexity_score"
+    type: "custom"
+    facets:
+      - metadata.sampling.temperature
+    path: "code_quality.py"
+    function_name: "complexity_weighted_average"
+    params:
+      weight_factor: 0.8
+
+# Workflow settings
+mode: "inference"
+batch_size: 4
+max_workers: 2
+output_dir: "output/"
