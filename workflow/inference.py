@@ -193,9 +193,9 @@ class InferenceEngine:
                 try:
                     batch_results = future.result()
                     results.extend(batch_results)
-
+                    
                     # Update status and save intermediate results
-                    self.completed_samples += len(batch) * self.num_samples
+                    self.completed_samples += len(batch)
                     status.processed_samples = self.completed_samples
                     
                     if self.output_manager:

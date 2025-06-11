@@ -202,6 +202,8 @@ class PassAtKMetric(Metric):
             
             if total_samples < self.k:
                 # Not enough samples, use what we have
+                # And print a warning
+                print(f"Warning: Not enough samples for item '{item_id}'. Expected {self.k}, got {total_samples}. Using total samples instead.")
                 k_effective = total_samples
             else:
                 k_effective = self.k

@@ -7,7 +7,6 @@ A flexible, extensible framework for evaluating language models with support for
 - **🔧 Client-First Design**: Easy-to-use API with builder pattern support
 - **🔄 Multiple Model Types**: OpenAI API, VLLM with Docker integration
 - **📊 Flexible Evaluation**: Built-in and custom evaluation methods and metrics
-- **🎯 Pass@K Support**: Built-in support for pass@k metrics with proper sample coordination
 - **⚙️ Configuration-Driven**: YAML/JSON configuration with programmatic overrides
 - **🔄 Resume Capability**: Checkpoint and resume interrupted evaluations
 - **🐳 Docker Integration**: Seamless VLLM model deployment
@@ -201,55 +200,6 @@ workflow = (EvalWorkflow.builder()
             .add_custom_evaluation_method("code_exec", code_execution_check)
             .add_custom_metric("weighted_avg", weighted_average)
             .build())
-```
-
-### Pass@K Evaluation Support
-
-The framework provides built-in support for pass@k metrics, which are essential for evaluating code generation and other tasks where multiple attempts may be needed to find a correct solution.
-
-#### Configuration
-
-```yaml
-# Sample parameters - specify num_samples for pass@k evaluation
-sample_params:
-  temperature: 0.7
-  max_tokens: 1024
-  num_samples: 16  # Generate 16 samples per dataset item
-
-# Built-in pass@k metrics
-metrics:
-  - name: "pass_at_1"
-    type: "built_in"
-    params:
-      k: 1
-  - name: "pass_at_16"
-    type: "built_in"
-    params:
-      k: 16
-```
-
-#### How It Works
-
-1. **Inference Phase**: For each dataset item, the framework generates `num_samples` responses
-2. **Sample Tracking**: Each response is tagged with `item_id`, `sample_id`, and `sample_index`
-3. **Evaluation Phase**: Evaluation methods are applied to each sample individually
-4. **Metric Calculation**: Pass@k metrics group samples by `item_id` and calculate the probability that at least one sample passes
-
-#### Example Usage
-
-```python
-workflow = (EvalWorkflow.builder()
-    .dataset_from_file("problems.jsonl")
-    .add_vllm_model("codellama-7b")
-    .sample_params(temperature=0.8, num_samples=16)
-    .add_evaluation_method("code_execution")
-    .add_metric("pass_at_1")
-    .add_metric("pass_at_16")
-    .build())
-
-results = workflow.run()
-print(f"Pass@1: {results['metrics']['pass_at_1']:.2%}")
-print(f"Pass@16: {results['metrics']['pass_at_16']:.2%}")
 ```
 
 ## Examples
