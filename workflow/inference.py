@@ -222,7 +222,7 @@ class InferenceEngine:
                     
                     # Generate response
                     inference_result = model.generate(prompt, **self.sample_params)
-                    
+
                     # Create result record with sample tracking
                     result_data = {
                         "item_id": item.id,
@@ -238,16 +238,19 @@ class InferenceEngine:
                         "prompt_tokens": inference_result.prompt_tokens,
                         "completion_tokens": inference_result.completion_tokens,
                         "timestamp": time.time(),
-                        "sample_params": self.sample_params,
-                        "metadata": inference_result.metadata,
-                        "ground_truth": item.data
+                        "ground_truth": item.data,
+                        "metadata": {
+                            "model_id": model.name,
+                            "prompt_template": self.prompt_processor.template,
+                            "sampling": self.sample_params,
+                            **inference_result.metadata
+                        }
                     }
                     
                     batch_results.append(result_data)
                     
                 except Exception as e:
-                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")
-                    # Create error record
+                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")                    # Create error record
                     error_result = {
                         "item_id": item.id,
                         "sample_id": f"{item.id}_sample_{sample_idx}",
@@ -258,9 +261,14 @@ class InferenceEngine:
                         "response": "",
                         "inference_time": 0,
                         "tokens_per_second": 0,
-                        "error": str(e),
                         "timestamp": time.time(),
-                        "ground_truth": item.data
+                        "ground_truth": item.data,
+                        "metadata": {
+                            "model_id": model.name,
+                            "prompt_template": self.prompt_processor.template,
+                            "sampling": self.sample_params
+                        },
+                        "error": str(e)
                     }
                     batch_results.append(error_result)
         

@@ -2,7 +2,7 @@
 Metrics calculation for the evaluation framework.
 
 This module provides both built-in and custom metrics for aggregating
-evaluation results across multiple samples.
+evaluation results across multiple samples with support for faceting.
 """
 
 from abc import ABC, abstractmethod
@@ -35,25 +35,28 @@ class MetricResult:
 class Metric(ABC):
     """Abstract base class for metrics."""
     
-    def __init__(self, name: str, **params):
+    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
         self.name = name
+        self.facets = facets or []
         self.params = params
     
     @abstractmethod
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
+    ) -> Union[List[MetricResult], List[Dict[str, Any]]]:
         """
         Calculate metric from evaluation results.
         
         Args:
             evaluation_results: List of evaluation results from all samples
+            facets: List of fields to group by for metric calculation
             **kwargs: Additional context or parameters
             
         Returns:
-            MetricResult containing calculated metric
+            MetricResult or list of metric records for different facet combinations
         """
         pass
     
@@ -83,18 +86,20 @@ class Metric(ABC):
     def from_config(cls, config: MetricConfig) -> "Metric":
         """Create metric from configuration object."""
         if config.type == "built_in":
-            return BuiltInMetric.create(config.name, **config.params)
+            return BuiltInMetric.create(config.name, facets=getattr(config, 'facets', []), **config.params)
         elif config.type == "custom":
             if config.path:
                 # File-based custom metric
-                return cls.from_file(config.name, config.path, config.function_name, **config.params)
-            elif hasattr(config, 'module') and hasattr(config, 'function_name'):
+                return cls.from_file(config.name, config.path, config.function_name, 
+                                   facets=getattr(config, 'facets', []), **config.params)
+            elif hasattr(config, 'module') and hasattr(config, 'function_name') and config.module and config.function_name:
                 # Module-based custom metric
                 try:
                     import importlib
                     module = importlib.import_module(config.module)
                     function = getattr(module, config.function_name)
-                    return cls.from_function(config.name, function, **config.params)
+                    return cls.from_function(config.name, function, 
+                                           facets=getattr(config, 'facets', []), **config.params)
                 except (ImportError, AttributeError) as e:
                     raise ValueError(f"Could not load function {config.function_name} from module {config.module}: {e}")
             else:
@@ -102,57 +107,94 @@ class Metric(ABC):
         else:
             raise ValueError(f"Unknown metric type: {config.type}")
 
+    def _group_by_facets(
+        self, 
+        evaluation_results: List[Dict[str, Any]], 
+        facets: List[str]
+    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        Group evaluation results by facets and item_id.
+        
+        Returns:
+            Dict with facet combinations as keys, each containing dict of item_id -> list of results
+        """
+        grouped = defaultdict(lambda: defaultdict(list))
+        
+        for result in evaluation_results:
+            # Build facet key
+            facet_values = []
+            for facet in facets:
+                if '.' in facet:
+                    # Handle nested fields like metadata.model_id
+                    parts = facet.split('.')
+                    value = result
+                    for part in parts:
+                        value = value.get(part, {}) if isinstance(value, dict) else {}
+                    facet_values.append(str(value) if value else "unknown")
+                else:
+                    facet_values.append(str(result.get(facet, "unknown")))
+            
+            # Also add label as a facet
+            facet_values.append(result.get("label", "unknown"))
+            facet_key = "+".join(facet_values)
+
+            # Group by item_id within each facet combination
+            item_id = result.get("item_id", "unknown")
+            grouped[facet_key][item_id].append(result)
+        
+        return dict(grouped)
+
 
 class CustomMetric(Metric):
     """Custom metric using user-provided function."""
     
-    def __init__(self, name: str, function: Callable, **params):
-        super().__init__(name, **params)
+    def __init__(self, name: str, function: Callable, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
         self.function = function
     
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
+    ) -> Union[List[MetricResult], List[Dict[str, Any]]]:
         """Calculate using custom function."""
+        used_facets = facets or self.facets
+        
         try:
+            # Call the custom function
             result = self.function(
                 evaluation_results=evaluation_results,
+                facets=used_facets,
                 **self.params,
                 **kwargs
             )
             
-            # Normalize result format
-            if isinstance(result, dict):
-                value = result
-                metadata = {}
-            elif isinstance(result, (int, float)):
-                value = result
-                metadata = {}
+            if isinstance(result, list):
+                return result
+            elif isinstance(result, dict):
+                return [result]
+            elif isinstance(result, MetricResult):
+                return [result]
             else:
-                value = result
-                metadata = {}
-            
-            return MetricResult(
-                metric_name=self.name,
-                value=value,
-                metadata=metadata
-            )
-            
+                return [MetricResult(
+                    metric_name=self.name,
+                    value=result,
+                    metadata={"facets": used_facets}
+                )]
         except Exception as e:
-            return MetricResult(
+            return [MetricResult(
                 metric_name=self.name,
                 value=0.0,
-                metadata={"error": str(e)}
-            )
+                metadata={"error": str(e), "facets": used_facets}
+            )]
 
 
 class BuiltInMetric(Metric):
     """Built-in metrics."""
     
     @classmethod
-    def create(cls, metric_name: str, **params) -> Metric:
+    def create(cls, metric_name: str, facets: Optional[List[str]] = None, **params) -> Metric:
         """Create built-in metric."""
         metric_map = {
             "pass_at_k": PassAtKMetric,
@@ -160,400 +202,243 @@ class BuiltInMetric(Metric):
             "median": MedianMetric,
             "percentile": PercentileMetric,
             "pass_rate": PassRateMetric,
-            "count": CountMetric,
-            "std": StandardDeviationMetric,
-            "min": MinMetric,
-            "max": MaxMetric,
-            "sum": SumMetric
+            "count": CountMetric
         }
         
         if metric_name not in metric_map:
             raise ValueError(f"Unknown built-in metric: {metric_name}")
         
-        return metric_map[metric_name](**params)
+        return metric_map[metric_name](facets=facets, **params)
 
 
 class PassAtKMetric(Metric):
-    """Pass@K metric - probability that at least one of K samples passes."""
+    """Pass@K metric calculation."""
     
-    def __init__(self, k: int = 1, num_samples: int = 1, **params):
-        super().__init__(f"pass_at_{k}", **params)
+    def __init__(self, k: int = 1, num_samples: int = 16, aggregation: str = "mean", facets: Optional[List[str]] = None, **params):
+        super().__init__("pass_at_k", facets, **params)
         self.k = k
         self.num_samples = num_samples
-
+        self.aggregation = aggregation
+    
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
-        """Calculate Pass@K metric."""
-        # Group results by item_id (original dataset item)
-        item_groups = defaultdict(list)
+    ) -> List[Dict[str, Any]]:
+        """Calculate pass@k metric grouped by facets."""
+        used_facets = facets or self.facets
+        
+        if not used_facets:
+            # No facets, calculate overall pass@k
+            grouped = {"overall": self._group_by_item_id(evaluation_results)}
+        else:
+            # Group by facets
+            grouped = self._group_by_facets(evaluation_results, used_facets)
+        
+        results = []
+        for facet_key, items_dict in grouped.items():
+            pass_at_k_values = []
+            total_samples = 0
+            
+            for item_id, item_results in items_dict.items():
+                # Check if at least k samples passed for this item
+                passed_samples = [r for r in item_results if r.get("passed", False)]
+                item_passes_at_k = len(passed_samples) >= self.k
+                pass_at_k_values.append(1.0 if item_passes_at_k else 0.0)
+                total_samples += len(item_results)
+            
+            if self.aggregation == "mean":
+                pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
+            else:
+                pass_at_k = sum(pass_at_k_values) / len(pass_at_k_values) if pass_at_k_values else 0.0
+            
+            # Parse facet values
+            facet_dict = {}
+            if used_facets and facet_key != "overall":
+                facet_values = facet_key.split('+')
+                for i, facet in enumerate(used_facets):
+                    if i < len(facet_values) - 1:  # Exclude label facet
+                        facet_dict[facet] = facet_values[i]
+                # Add label as separate field
+                if len(facet_values) > len(used_facets):
+                    facet_dict["label"] = facet_values[-1]
+            
+            result = {
+                **facet_dict,
+                f"pass_at_{self.k}": pass_at_k,
+                "average_sample_count": total_samples / len(items_dict) if items_dict else 0,
+                "total_sample_count": total_samples,
+                "total_item_count": len(items_dict)
+            }
+            results.append(result)
+        
+        return results
+    
+    def _group_by_item_id(self, evaluation_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group results by item_id only."""
+        grouped = defaultdict(list)
         for result in evaluation_results:
             item_id = result.get("item_id", "unknown")
-            item_groups[item_id].append(result)
-        
-        pass_at_k_scores = []
-        
-        for item_id, item_results in item_groups.items():
-            # Count passed samples for this item
-            passed_count = sum(1 for r in item_results if r.get("passed", False))
-            total_samples = len(item_results)
-            
-            if total_samples < self.k:
-                # Not enough samples, use what we have
-                # And print a warning
-                print(f"Warning: Not enough samples for item '{item_id}'. Expected {self.k}, got {total_samples}. Using total samples instead.")
-                k_effective = total_samples
-            else:
-                k_effective = self.k
-            
-            # Calculate pass@k: if at least one sample passes, then pass@k = 1
-            if passed_count >= 1:
-                pass_at_k = 1.0
-            else:
-                pass_at_k = 0.0
-            
-            pass_at_k_scores.append(pass_at_k)
-        
-        mean_pass_at_k = statistics.mean(pass_at_k_scores) if pass_at_k_scores else 0.0
-        
-        return MetricResult(
-            metric_name=self.name,
-            value=mean_pass_at_k,
-            metadata={
-                "k": self.k,
-                "num_items": len(item_groups),
-                "total_samples": len(evaluation_results),
-                "individual_scores": pass_at_k_scores,
-                "samples_per_item": len(evaluation_results) // len(item_groups) if item_groups else 0
-            }
-        )
+            grouped[item_id].append(result)
+        return grouped
 
 
 class MeanMetric(Metric):
-    """Mean/average metric."""
+    """Mean score metric."""
     
-    def __init__(self, field: str = "score", **params):
-        super().__init__("mean", **params)
-        self.field = field
+    def __init__(self, facets: Optional[List[str]] = None, **params):
+        super().__init__("mean", facets, **params)
     
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
-        """Calculate mean of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
+    ) -> List[Dict[str, Any]]:
+        """Calculate mean score grouped by facets."""
+        used_facets = facets or self.facets
         
-        if not values:
-            mean_value = 0.0
+        if not used_facets:
+            # No facets, calculate overall mean
+            scores = [r.get("score", 0.0) for r in evaluation_results]
+            mean_score = statistics.mean(scores) if scores else 0.0
+            return [{"mean": mean_score, "sample_count": len(scores)}]
         else:
-            mean_value = statistics.mean(values)
-        
-        return MetricResult(
-            metric_name=f"mean_{self.field}",
-            value=mean_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
+            # Group by facets
+            grouped = self._group_by_facets(evaluation_results, used_facets)
+            
+            results = []
+            for facet_key, items_dict in grouped.items():
+                # Flatten all results for this facet combination
+                all_results = []
+                for item_results in items_dict.values():
+                    all_results.extend(item_results)
+                
+                scores = [r.get("score", 0.0) for r in all_results]
+                mean_score = statistics.mean(scores) if scores else 0.0
+                
+                # Parse facet values
+                facet_dict = {}
+                if facet_key != "overall":
+                    facet_values = facet_key.split('+')
+                    for i, facet in enumerate(used_facets):
+                        if i < len(facet_values) - 1:  # Exclude label facet
+                            facet_dict[facet] = facet_values[i]
+                    # Add label as separate field
+                    if len(facet_values) > len(used_facets):
+                        facet_dict["label"] = facet_values[-1]
+                
+                result = {
+                    **facet_dict,
+                    "mean": mean_score,
+                    "sample_count": len(scores)
+                }
+                results.append(result)
+            
+            return results
 
 
 class MedianMetric(Metric):
-    """Median metric."""
-    
-    def __init__(self, field: str = "score", **params):
-        super().__init__("median", **params)
-        self.field = field
+    """Median score metric."""
+
+    def __init__(self, facets: Optional[List[str]] = None, **params):
+        super().__init__("median", facets, **params)
     
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
-        """Calculate median of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
+    ) -> List[MetricResult]:
+        """Calculate median score."""
+        scores = [r.get("score", 0.0) for r in evaluation_results]
+        median_score = statistics.median(scores) if scores else 0.0
         
-        if not values:
-            median_value = 0.0
-        else:
-            median_value = statistics.median(values)
-        
-        return MetricResult(
-            metric_name=f"median_{self.field}",
-            value=median_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
+        return [MetricResult(
+            metric_name=self.name,
+            value=median_score,
+            metadata={"sample_count": len(scores)}
+        )]
 
 
 class PercentileMetric(Metric):
-    """Percentile metric."""
+    """Percentile score metric."""
     
-    def __init__(self, percentile: float = 50.0, field: str = "score", **params):
-        super().__init__(f"p{percentile}", **params)
+    def __init__(self, percentile: float = 95.0, facets: Optional[List[str]] = None, **params):
+        super().__init__("percentile", facets, **params)
         self.percentile = percentile
-        self.field = field
     
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
-        """Calculate percentile of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
+    ) -> List[MetricResult]:
+        """Calculate percentile score."""
+        scores = [r.get("score", 0.0) for r in evaluation_results]
         
-        if not values:
-            percentile_value = 0.0
+        if not scores:
+            percentile_score = 0.0
         else:
-            values.sort()
-            n = len(values)
-            index = (self.percentile / 100.0) * (n - 1)
-            
+            scores.sort()
+            index = (self.percentile / 100.0) * (len(scores) - 1)
             if index.is_integer():
-                percentile_value = values[int(index)]
+                percentile_score = scores[int(index)]
             else:
-                lower_index = int(math.floor(index))
-                upper_index = int(math.ceil(index))
-                weight = index - lower_index
-                percentile_value = values[lower_index] * (1 - weight) + values[upper_index] * weight
+                lower = scores[int(index)]
+                upper = scores[int(index) + 1]
+                percentile_score = lower + (upper - lower) * (index - int(index))
         
-        return MetricResult(
-            metric_name=f"p{self.percentile}_{self.field}",
-            value=percentile_value,
-            metadata={
-                "percentile": self.percentile,
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
+        return [MetricResult(
+            metric_name=self.name,
+            value=percentile_score,
+            metadata={"percentile": self.percentile, "sample_count": len(scores)}
+        )]
 
 
 class PassRateMetric(Metric):
     """Pass rate metric."""
     
-    def __init__(self, **params):
-        super().__init__("pass_rate", **params)
+    def __init__(self, facets: Optional[List[str]] = None, **params):
+        super().__init__("pass_rate", facets, **params)
     
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
+    ) -> List[MetricResult]:
         """Calculate pass rate."""
-        passed_count = sum(1 for result in evaluation_results if result.get("passed", False))
+        passed_count = sum(1 for r in evaluation_results if r.get("passed", False))
         total_count = len(evaluation_results)
-        
         pass_rate = passed_count / total_count if total_count > 0 else 0.0
         
-        return MetricResult(
-            metric_name="pass_rate",
+        return [MetricResult(
+            metric_name=self.name,
             value=pass_rate,
-            metadata={
-                "passed_count": passed_count,
-                "total_count": total_count
-            }
-        )
+            metadata={"passed_count": passed_count, "total_count": total_count}
+        )]
 
 
 class CountMetric(Metric):
     """Count metric."""
     
-    def __init__(self, field: Optional[str] = None, value: Optional[Any] = None, **params):
-        super().__init__("count", **params)
-        self.field = field
-        self.value = value
-    
+    def __init__(self, facets: Optional[List[str]] = None, **params):
+        super().__init__("count", facets, **params)
+
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
+        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> MetricResult:
-        """Count total results or results matching criteria."""
-        if self.field is None:
-            count = len(evaluation_results)
-            name = "total_count"
-        else:
-            if self.value is None:
-                count = sum(1 for result in evaluation_results if self.field in result)
-                name = f"count_with_{self.field}"
-            else:
-                count = sum(1 for result in evaluation_results 
-                           if result.get(self.field) == self.value)
-                name = f"count_{self.field}_{self.value}"
-        
-        return MetricResult(
-            metric_name=name,
-            value=count,
-            metadata={
-                "field": self.field,
-                "value": self.value,
-                "total_results": len(evaluation_results)
-            }
-        )
-
-
-class StandardDeviationMetric(Metric):
-    """Standard deviation metric."""
-    
-    def __init__(self, field: str = "score", **params):
-        super().__init__("std", **params)
-        self.field = field
-    
-    def calculate(
-        self, 
-        evaluation_results: List[Dict[str, Any]],
-        **kwargs
-    ) -> MetricResult:
-        """Calculate standard deviation of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
-        
-        if len(values) <= 1:
-            std_value = 0.0
-        else:
-            std_value = statistics.stdev(values)
-        
-        return MetricResult(
-            metric_name=f"std_{self.field}",
-            value=std_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
-
-
-class MinMetric(Metric):
-    """Minimum value metric."""
-    
-    def __init__(self, field: str = "score", **params):
-        super().__init__("min", **params)
-        self.field = field
-    
-    def calculate(
-        self, 
-        evaluation_results: List[Dict[str, Any]],
-        **kwargs
-    ) -> MetricResult:
-        """Calculate minimum of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
-        
-        if not values:
-            min_value = 0.0
-        else:
-            min_value = min(values)
-        
-        return MetricResult(
-            metric_name=f"min_{self.field}",
-            value=min_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
-
-
-class MaxMetric(Metric):
-    """Maximum value metric."""
-    
-    def __init__(self, field: str = "score", **params):
-        super().__init__("max", **params)
-        self.field = field
-    
-    def calculate(
-        self, 
-        evaluation_results: List[Dict[str, Any]],
-        **kwargs
-    ) -> MetricResult:
-        """Calculate maximum of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
-        
-        if not values:
-            max_value = 0.0
-        else:
-            max_value = max(values)
-        
-        return MetricResult(
-            metric_name=f"max_{self.field}",
-            value=max_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
-
-
-class SumMetric(Metric):
-    """Sum metric."""
-    
-    def __init__(self, field: str = "score", **params):
-        super().__init__("sum", **params)
-        self.field = field
-    
-    def calculate(
-        self, 
-        evaluation_results: List[Dict[str, Any]],
-        **kwargs
-    ) -> MetricResult:
-        """Calculate sum of specified field."""
-        values = []
-        for result in evaluation_results:
-            if self.field in result:
-                value = result[self.field]
-                if isinstance(value, (int, float)):
-                    values.append(value)
-        
-        sum_value = sum(values) if values else 0.0
-        
-        return MetricResult(
-            metric_name=f"sum_{self.field}",
-            value=sum_value,
-            metadata={
-                "field": self.field,
-                "count": len(values),
-                "total_results": len(evaluation_results)
-            }
-        )
+    ) -> List[MetricResult]:
+        """Calculate count."""
+        return [MetricResult(
+            metric_name=self.name,
+            value=len(evaluation_results),
+            metadata={}
+        )]
 
 
 def _load_function_from_file(file_path: str, function_name: str) -> Callable:

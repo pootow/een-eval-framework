@@ -94,7 +94,7 @@ class EvaluationEngine:
         
         self.logger.info(f"Loaded {len(results)} inference results")
         return results
-    
+
     def _apply_evaluation_methods(
         self, 
         inference_results: List[Dict[str, Any]], 
@@ -110,91 +110,114 @@ class EvaluationEngine:
                 if idx % 100 == 0:
                     self.logger.info(f"Processed {idx}/{len(inference_results)} samples")
                 
-                eval_result = result.copy()
-                eval_result["evaluations"] = {}
-
                 # Apply each evaluation method
                 for method in self.evaluation_methods:
                     try:
                         # Extract response and ground truth from the result
-                        response = result.get("response", result.get("generated_output", ""))
+                        response = result.get("response", "")
                         ground_truth = result.get("ground_truth", {})
                         
-                        # Apply evaluation method
-                        evaluation_result = method.evaluate(response, ground_truth, sample_data=result)
+                        # Apply evaluation method with new interface
+                        evaluation_result = method.evaluate(
+                            response=response, 
+                            ground_truth=ground_truth, 
+                            inference_result=result
+                        )
                         
-                        # Handle different return types from evaluation methods
-                        if hasattr(evaluation_result, 'score'):
-                            # EvaluationResult object
-                            eval_result["evaluations"][method.name] = {
-                                "score": evaluation_result.score,
-                                "passed": evaluation_result.passed,
-                                "method": method.name,
-                                "details": evaluation_result.details
-                            }
-                        else:
-                            # Direct score value (for backward compatibility)
-                            eval_result["evaluations"][method.name] = {
-                                "score": evaluation_result,
-                                "method": method.name
-                            }
+                        # Process the labels from the evaluation result
+                        if "labels" in evaluation_result:
+                            for label_info in evaluation_result["labels"]:
+                                label_name = label_info["label"]["name"]
+                                label_result = label_info["result"]
+                                
+                                # Create evaluation result record following DataFlow.md spec
+                                eval_record = {
+                                    # Preserved from inference
+                                    "item_id": result.get("item_id"),
+                                    "sample_id": result.get("sample_id"),
+                                    "sample_index": result.get("sample_index"),
+                                    "label": label_name,
+                                    "model_name": result.get("model_name"),
+                                    
+                                    # From evaluation method
+                                    "passed": label_result.get("passed", False),
+                                    "score": label_result.get("score", 0.0),
+                                    "detailed_results": {k: v for k, v in label_result.items() 
+                                                       if k not in ["passed", "score"]},
+                                    
+                                    # Metadata
+                                    "evaluation_time": 0.0,  # TODO: Add timing
+                                    "timestamp": result.get("timestamp"),
+                                    "metadata": result.get("metadata", {})
+                                }
+                                
+                                evaluation_results.append(eval_record)
                         
                     except Exception as e:
                         self.logger.warning(f"Error applying method {method.name} to sample {idx}: {e}")
-                        eval_result["evaluations"][method.name] = {
+                        # Create error record
+                        error_record = {
+                            "item_id": result.get("item_id"),
+                            "sample_id": result.get("sample_id"),
+                            "sample_index": result.get("sample_index"),
+                            "label": method.name,
+                            "model_name": result.get("model_name"),
+                            "passed": False,
                             "score": 0.0,
-                            "method": method.name,
-                            "error": str(e)
+                            "detailed_results": {"error": str(e)},
+                            "evaluation_time": 0.0,
+                            "timestamp": result.get("timestamp"),
+                            "metadata": result.get("metadata", {})
                         }
-                
-                evaluation_results.append(eval_result)
+                        evaluation_results.append(error_record)
                 
             except Exception as e:
                 self.logger.error(f"Error processing sample {idx}: {e}")
-                status.errors.append(f"Sample {idx}: {str(e)}")
                 continue
-        
+
         return evaluation_results
-    
+
     def _compute_metrics(
         self, 
         evaluation_results: List[Dict[str, Any]], 
         status
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """Compute metrics on evaluation results."""
-        metrics_results = {}
+        all_metrics_results = []
         
-        # Group results by model and evaluation method
-        grouped_results = self._group_results_by_model_and_method(evaluation_results)
-        
-        for model_name, model_results in grouped_results.items():
-            metrics_results[model_name] = {}
-            
-            for method_name, method_results in model_results.items():
-                metrics_results[model_name][method_name] = {}
+        for metric in self.metrics:
+            try:
+                # Calculate metric with facet support
+                metric_results = metric.calculate(evaluation_results)
                 
-                # Extract scores for this method
-                scores = [r["score"] for r in method_results if "error" not in r]
-                
-                if not scores:
-                    self.logger.warning(f"No valid scores for {model_name}.{method_name}")
-                    continue
-
-                # Apply each metric
-                for metric in self.metrics:
-                    try:
-                        metric_result = metric.calculate(method_results)
-                        if hasattr(metric_result, 'value'):
-                            # MetricResult object
-                            metrics_results[model_name][method_name][metric.name] = metric_result.value
-                        else:
-                            # Direct value
-                            metrics_results[model_name][method_name][metric.name] = metric_result
-                    except Exception as e:
-                        self.logger.warning(f"Error computing metric {metric.name}: {e}")
-                        metrics_results[model_name][method_name][metric.name] = None
+                # Handle different return types
+                if isinstance(metric_results, list):
+                    # Multiple results (faceted metrics)
+                    for result in metric_results:
+                        if isinstance(result, dict):
+                            # Add metric name if not present
+                            if "metric_name" not in result:
+                                result["metric_name"] = metric.name
+                            all_metrics_results.append(result)
+                else:
+                    # Single result
+                    if hasattr(metric_results, 'to_dict'):
+                        all_metrics_results.append(metric_results.to_dict())
+                    else:
+                        all_metrics_results.append({
+                            "metric_name": metric.name,
+                            "value": metric_results
+                        })
+                        
+            except Exception as e:
+                self.logger.warning(f"Error computing metric {metric.name}: {e}")
+                all_metrics_results.append({
+                    "metric_name": metric.name,
+                    "value": None,
+                    "error": str(e)
+                })
         
-        return metrics_results
+        return all_metrics_results
     
     def _group_results_by_model_and_method(
         self, 
@@ -217,20 +240,14 @@ class EvaluationEngine:
                 grouped[model_name][method_name].append(eval_data)
         
         return grouped
-    
-    def _save_results(self, results: Dict[str, Any]) -> None:
-        """Save evaluation results to output directory."""
-        # Save detailed results
-        self.output_manager.save_evaluation_results(results["detailed_results"])
+
+    def _save_results(self, final_results: Dict[str, Any]) -> None:
+        """Save evaluation results to output files."""
+        # Save evaluation results
+        self.output_manager.save_evaluation_results(final_results["detailed_results"])
         
-        # Save metrics summary
-        metrics_file = Path(self.output_manager.output_dir) / "metrics.json"
-        with open(metrics_file, 'w', encoding='utf-8') as f:
-            json.dump(results["metrics"], f, indent=2, ensure_ascii=False)
+        # Save metrics results
+        self.output_manager.save_metrics(final_results["metrics"])
         
         # Save evaluation summary
-        summary_file = Path(self.output_manager.output_dir) / "evaluation_summary.json"
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump(results["evaluation_summary"], f, indent=2, ensure_ascii=False)
-        
-        self.logger.info(f"Evaluation results saved to {self.output_manager.output_dir}")
+        self.output_manager.save_evaluation_summary(final_results["evaluation_summary"])

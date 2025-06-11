@@ -16,21 +16,54 @@ from pathlib import Path
 
 from een_eval.workflow.config import EvaluationMethodConfig
 
+@dataclass
+class EvaluationLabelConfig:
+    """Configuration for a single label in evaluation."""
+
+    name: str
+    description: Optional[str] = None
+
+@dataclass
+class EvaluationLabelResult:
+    """Result for a single label in evaluation."""
+
+    passed: bool
+    score: float
+    custom_fields: Dict[str, Any]
+
+
+@dataclass
+class EvaluationLabel:
+    """Result for a single label in evaluation."""
+    
+    label: EvaluationLabelConfig
+    result: EvaluationLabelResult
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "label": {
+                "name": self.label.name,
+                "description": self.label.description
+            },
+            "result": {
+                "passed": self.result.passed,
+                "score": self.result.score,
+                "custom_fields": self.result.custom_fields
+            }
+        }
+
 
 @dataclass
 class EvaluationResult:
     """Result from evaluation method."""
-    method_name: str
-    passed: bool
-    score: float
-    details: Dict[str, Any]
-    
+
+    labels: list[EvaluationLabel]
+    custom_fields: Dict[str, Any]
+
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "method_name": self.method_name,
-            "passed": self.passed,
-            "score": self.score,
-            "details": self.details
+            "labels": [label.to_dict() for label in self.labels],
+            "custom_fields": self.custom_fields
         }
 
 
@@ -46,18 +79,36 @@ class EvaluationMethod(ABC):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """
         Evaluate a response against ground truth.
         
         Args:
             response: The model's response
             ground_truth: Ground truth data
+            inference_result: Full inference result for context
             **kwargs: Additional context or parameters
             
         Returns:
-            EvaluationResult containing assessment
+            Dictionary containing labels and evaluation results in the format:
+            {
+                "labels": [
+                    {
+                        "label": {"name": "label_name"},
+                        "result": {
+                            "passed": bool,
+                            "score": float,
+                            "custom_fields": { ... },
+                            ...
+                        }
+                    },
+                    ...
+                ],
+                "custom_fields": { ... },
+                ...
+            }
         """
         pass
     
@@ -86,14 +137,13 @@ class EvaluationMethod(ABC):
     @classmethod
     def from_config(cls, config: EvaluationMethodConfig) -> "EvaluationMethod":
         """Create evaluation method from configuration object."""
-        print(f"DEBUG: Creating evaluation method from config: {config}")
         if config.type == "built_in":
             return BuiltInEvaluationMethod.create(config.name, **config.params)
         elif config.type == "custom":
             if config.path:
                 # File-based custom evaluation method
                 return cls.from_file(config.name, config.path, config.function_name, **config.params)
-            elif hasattr(config, 'module') and hasattr(config, 'function_name'):
+            elif hasattr(config, 'module') and hasattr(config, 'function_name') and config.module and config.function_name:
                 # Module-based custom evaluation method  
                 try:
                     import importlib
@@ -126,48 +176,87 @@ class CustomEvaluationMethod(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Evaluate using custom function."""
         try:
             # Call the custom function
             result = self.function(
                 response=response, 
                 ground_truth=ground_truth, 
+                inference_result=inference_result or {},
                 **self.params,
                 **kwargs
             )
             
-            # Normalize result format
+            # Normalize result format to match new specification
             if isinstance(result, dict):
+                # If result already has the new format with labels
+                if "labels" in result:
+                    return result
+                
+                # Convert old format to new format
                 passed = result.get('passed', False)
                 score = result.get('score', 0.0)
                 details = {k: v for k, v in result.items() if k not in ['passed', 'score']}
+                
+                return {
+                    "labels": [
+                        {
+                            "label": {"name": self.name},
+                            "result": {
+                                "passed": passed,
+                                "score": score,
+                                **details
+                            }
+                        }
+                    ]
+                }
             elif isinstance(result, (int, float)):
                 passed = result > 0
                 score = float(result)
-                details = {}
+                return {
+                    "labels": [
+                        {
+                            "label": {"name": self.name},
+                            "result": {
+                                "passed": passed,
+                                "score": score
+                            }
+                        }
+                    ]
+                }
             elif isinstance(result, bool):
                 passed = result
                 score = 1.0 if result else 0.0
-                details = {}
+                return {
+                    "labels": [
+                        {
+                            "label": {"name": self.name},
+                            "result": {
+                                "passed": passed,
+                                "score": score
+                            }
+                        }
+                    ]
+                }
             else:
                 raise ValueError(f"Invalid result type from evaluation function: {type(result)}")
             
-            return EvaluationResult(
-                method_name=self.name,
-                passed=passed,
-                score=score,
-                details=details
-            )
-            
         except Exception as e:
-            return EvaluationResult(
-                method_name=self.name,
-                passed=False,
-                score=0.0,
-                details={"error": str(e)}
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": self.name},
+                        "result": {
+                            "passed": False,
+                            "score": 0.0,
+                            "error": str(e)
+                        }
+                    }
+                ]
+            }
 
 
 class BuiltInEvaluationMethod(EvaluationMethod):
@@ -199,45 +288,57 @@ class ExactMatchEvaluation(EvaluationMethod):
                  ground_truth_field: str = "expected_output",
                  case_sensitive: bool = True,
                  strip_whitespace: bool = True,
+                 expected_content: Optional[str] = None,
                  **params):
         super().__init__("exact_match", **params)
         self.response_field = response_field
         self.ground_truth_field = ground_truth_field
         self.case_sensitive = case_sensitive
         self.strip_whitespace = strip_whitespace
+        self.expected_content = expected_content
     
     def evaluate(
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
-        """Check exact match between response and expected output."""
-        expected = ground_truth.get(self.ground_truth_field, "")
+    ) -> Dict[str, Any]:
+        """Perform exact match evaluation."""
+        # Get expected value
+        if self.expected_content is not None:
+            expected = self.expected_content
+        else:
+            expected = ground_truth.get(self.ground_truth_field, "")
         
-        # Process strings
+        # Get actual response
         actual = response
+        
+        # Normalize strings
         if self.strip_whitespace:
-            actual = actual.strip()
             expected = str(expected).strip()
+            actual = actual.strip()
         
         if not self.case_sensitive:
-            actual = actual.lower()
             expected = expected.lower()
+            actual = actual.lower()
         
-        passed = actual == expected
+        # Compare
+        match = expected == actual
         
-        return EvaluationResult(
-            method_name=self.name,
-            passed=passed,
-            score=1.0 if passed else 0.0,
-            details={
-                "expected": expected,
-                "actual": actual,
-                "case_sensitive": self.case_sensitive,
-                "strip_whitespace": self.strip_whitespace
-            }
-        )
+        return {
+            "labels": [
+                {
+                    "label": {"name": "exact_match"},
+                    "result": {
+                        "passed": match,
+                        "score": 1.0 if match else 0.0,
+                        "expected": expected,
+                        "actual": actual
+                    }
+                }
+            ]
+        }
 
 
 class ContainsEvaluation(EvaluationMethod):
@@ -257,8 +358,9 @@ class ContainsEvaluation(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Check if response contains expected content."""
         expected = self.expected_content or ground_truth.get(self.ground_truth_field, "")
         
@@ -269,16 +371,20 @@ class ContainsEvaluation(EvaluationMethod):
         
         passed = expected in actual
         
-        return EvaluationResult(
-            method_name=self.name,
-            passed=passed,
-            score=1.0 if passed else 0.0,
-            details={
-                "expected_content": expected,
-                "case_sensitive": self.case_sensitive,
-                "found": passed
-            }
-        )
+        return {
+            "labels": [
+                {
+                    "label": {"name": "contains"},
+                    "result": {
+                        "passed": passed,
+                        "score": 1.0 if passed else 0.0,
+                        "expected_content": expected,
+                        "case_sensitive": self.case_sensitive,
+                        "found": passed
+                    }
+                }
+            ]
+        }
 
 
 class RegexMatchEvaluation(EvaluationMethod):
@@ -298,8 +404,9 @@ class RegexMatchEvaluation(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Check if response matches regex pattern."""
         pattern = self.pattern or ground_truth.get(self.ground_truth_field, "")
         
@@ -307,29 +414,39 @@ class RegexMatchEvaluation(EvaluationMethod):
             match = re.search(pattern, response, self.flags)
             passed = match is not None
             
-            details = {
+            result_details = {
+                "passed": passed,
+                "score": 1.0 if passed else 0.0,
                 "pattern": pattern,
                 "matched": passed
             }
             
             if match:
-                details["match_groups"] = match.groups()
-                details["match_span"] = match.span()
+                result_details["match_groups"] = match.groups()
+                result_details["match_span"] = match.span()
             
-            return EvaluationResult(
-                method_name=self.name,
-                passed=passed,
-                score=1.0 if passed else 0.0,
-                details=details
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "regex_match"},
+                        "result": result_details
+                    }
+                ]
+            }
             
         except re.error as e:
-            return EvaluationResult(
-                method_name=self.name,
-                passed=False,
-                score=0.0,
-                details={"error": f"Invalid regex pattern: {e}"}
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "regex_match"},
+                        "result": {
+                            "passed": False,
+                            "score": 0.0,
+                            "error": f"Invalid regex pattern: {e}"
+                        }
+                    }
+                ]
+            }
 
 
 class JsonMatchEvaluation(EvaluationMethod):
@@ -349,8 +466,9 @@ class JsonMatchEvaluation(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Check if response is valid JSON with expected structure."""
         try:
             # Parse response as JSON
@@ -377,40 +495,52 @@ class JsonMatchEvaluation(EvaluationMethod):
                     missing_keys = expected_keys - response_keys
                     extra_keys = set()
                 
-                return EvaluationResult(
-                    method_name=self.name,
-                    passed=passed,
-                    score=1.0 if passed else 0.0,
-                    details={
-                        "is_valid_json": True,
-                        "expected_keys": list(expected_keys),
-                        "actual_keys": list(response_keys),
-                        "missing_keys": list(missing_keys),
-                        "extra_keys": list(extra_keys),
-                        "strict_mode": self.strict
-                    }
-                )
+                return {
+                    "labels": [
+                        {
+                            "label": {"name": "json_match"},
+                            "result": {
+                                "passed": passed,
+                                "score": 1.0 if passed else 0.0,
+                                "is_valid_json": True,
+                                "expected_keys": list(expected_keys),
+                                "actual_keys": list(response_keys),
+                                "missing_keys": list(missing_keys),
+                                "extra_keys": list(extra_keys),
+                                "strict_mode": self.strict
+                            }
+                        }
+                    ]
+                }
             else:
-                return EvaluationResult(
-                    method_name=self.name,
-                    passed=False,
-                    score=0.0,
-                    details={
-                        "is_valid_json": True,
-                        "error": "Response is not a JSON object"
-                    }
-                )
+                return {
+                    "labels": [
+                        {
+                            "label": {"name": "json_match"},
+                            "result": {
+                                "passed": False,
+                                "score": 0.0,
+                                "is_valid_json": True,
+                                "error": "Response is not a JSON object"
+                            }
+                        }
+                    ]
+                }
                 
         except json.JSONDecodeError as e:
-            return EvaluationResult(
-                method_name=self.name,
-                passed=False,
-                score=0.0,
-                details={
-                    "is_valid_json": False,
-                    "error": f"Invalid JSON: {e}"
-                }
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "json_match"},
+                        "result": {
+                            "passed": False,
+                            "score": 0.0,
+                            "is_valid_json": False,
+                            "error": f"Invalid JSON: {e}"
+                        }
+                    }
+                ]
+            }
 
 
 class NumericMatchEvaluation(EvaluationMethod):
@@ -432,20 +562,27 @@ class NumericMatchEvaluation(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Check if response contains expected numeric value."""
         expected = self.expected_value
         if expected is None:
             expected = ground_truth.get(self.ground_truth_field)
         
         if expected is None:
-            return EvaluationResult(
-                method_name=self.name,
-                passed=False,
-                score=0.0,
-                details={"error": "No expected value provided"}
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "numeric_match"},
+                        "result": {
+                            "passed": False,
+                            "score": 0.0,
+                            "error": "No expected value provided"
+                        }
+                    }
+                ]
+            }
         
         try:
             # Extract numeric value from response
@@ -467,25 +604,35 @@ class NumericMatchEvaluation(EvaluationMethod):
             passed = abs(actual - expected) <= self.tolerance
             score = 1.0 if passed else max(0.0, 1.0 - abs(actual - expected) / max(abs(expected), 1.0))
             
-            return EvaluationResult(
-                method_name=self.name,
-                passed=passed,
-                score=score,
-                details={
-                    "expected": expected,
-                    "actual": actual,
-                    "difference": abs(actual - expected),
-                    "tolerance": self.tolerance
-                }
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "numeric_match"},
+                        "result": {
+                            "passed": passed,
+                            "score": score,
+                            "expected": expected,
+                            "actual": actual,
+                            "difference": abs(actual - expected),
+                            "tolerance": self.tolerance
+                        }
+                    }
+                ]
+            }
             
         except (ValueError, TypeError) as e:
-            return EvaluationResult(
-                method_name=self.name,
-                passed=False,
-                score=0.0,
-                details={"error": f"Could not extract numeric value: {e}"}
-            )
+            return {
+                "labels": [
+                    {
+                        "label": {"name": "numeric_match"},
+                        "result": {
+                            "passed": False,
+                            "score": 0.0,
+                            "error": f"Could not extract numeric value: {e}"
+                        }
+                    }
+                ]
+            }
 
 
 class LengthCheckEvaluation(EvaluationMethod):
@@ -507,8 +654,9 @@ class LengthCheckEvaluation(EvaluationMethod):
         self, 
         response: str, 
         ground_truth: Dict[str, Any], 
+        inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> EvaluationResult:
+    ) -> Dict[str, Any]:
         """Check if response meets length requirements."""
         if self.unit == "characters":
             length = len(response)
@@ -520,7 +668,7 @@ class LengthCheckEvaluation(EvaluationMethod):
             raise ValueError(f"Unknown unit: {self.unit}")
         
         passed = True
-        details = {
+        result_details = {
             "length": length,
             "unit": self.unit
         }
@@ -528,27 +676,32 @@ class LengthCheckEvaluation(EvaluationMethod):
         if self.min_length is not None:
             if length < self.min_length:
                 passed = False
-            details["min_length"] = self.min_length
-            details["meets_min"] = length >= self.min_length
+            result_details["min_length"] = self.min_length
+            result_details["meets_min"] = length >= self.min_length
         
         if self.max_length is not None:
             if length > self.max_length:
                 passed = False
-            details["max_length"] = self.max_length
-            details["meets_max"] = length <= self.max_length
+            result_details["max_length"] = self.max_length
+            result_details["meets_max"] = length <= self.max_length
         
         if self.expected_length is not None:
             if length != self.expected_length:
                 passed = False
-            details["expected_length"] = self.expected_length
-            details["matches_expected"] = length == self.expected_length
+            result_details["expected_length"] = self.expected_length
+            result_details["matches_expected"] = length == self.expected_length
         
-        return EvaluationResult(
-            method_name=self.name,
-            passed=passed,
-            score=1.0 if passed else 0.0,
-            details=details
-        )
+        result_details["passed"] = passed
+        result_details["score"] = 1.0 if passed else 0.0
+        
+        return {
+            "labels": [
+                {
+                    "label": {"name": "length_check"},
+                    "result": result_details
+                }
+            ]
+        }
 
 
 def _load_function_from_file(file_path: str, function_name: str) -> Callable:

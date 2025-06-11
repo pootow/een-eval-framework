@@ -285,3 +285,13 @@ class OutputManager:
         results["summary"] = self.get_output_summary()
         
         return results if results else None
+    
+    def save_evaluation_summary(self, summary: Dict[str, Any]) -> None:
+        """Save evaluation summary."""
+        try:
+            summary_file = self.output_dir / "evaluation_summary.json"
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
+            self.logger.debug(f"Saved evaluation summary to {summary_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to save evaluation summary: {e}")
