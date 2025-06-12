@@ -39,20 +39,25 @@ python -m een_eval.cli validate --config config.yaml
 
 ```bash
 # Full evaluation (inference + evaluation)
+python -m een_eval.cli run --config config.yaml --mode full
+
+# Inference only, mode is default to 'inference'
 python -m een_eval.cli run --config config.yaml
 
-# Inference only
-python -m een_eval.cli run --config config.yaml --mode inference
-
 # Evaluation only (requires existing predictions)
-python -m een_eval.cli run --config config.yaml --mode evaluation
+python -m een_eval.cli run --config config.yaml --mode evaluation --output-dir results/eval_20231201_120000
+
+# Or you can use the short form
+python -m een_eval.cli eval --config config.yaml --output-dir results/eval_20231201_120000
 ```
 
 ### 5. Resume Interrupted Evaluation
 
 ```bash
-python -m een_eval.cli resume --resume-dir results/eval_20231201_120000
+python -m een_eval.cli resume --output-dir results/eval_20231201_120000 --config config.yaml
 ```
+
+This will only resume the inference mode.
 
 ## Command Line Options
 
@@ -114,7 +119,7 @@ python -m een_eval.cli run --config eval_config.yaml --verbose
 
 ```bash
 # If evaluation is interrupted, resume from checkpoint
-python -m een_eval.cli resume --resume-dir results/eval_20231201_120000 --verbose
+python -m een_eval.cli resume --output-dir results/eval_20231201_120000 --verbose
 ```
 
 ## Configuration File Format

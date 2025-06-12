@@ -331,23 +331,29 @@ def create_minimal_config_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 def resume_evaluation(args: argparse.Namespace) -> int:
     """Resume a previously interrupted evaluation."""
     try:
-        if not args.resume_dir:
-            print("❌ Resume directory is required")
+        if not args.output_dir:
+            print("❌ Output directory is required")
             return 1
         
-        # Create workflow with resume settings
-        # Note: This is a simplified implementation
-        # In practice, you'd load the previous config and state
-        config = Config()
+        # Load config if provided
+        config = None
+        if args.config:
+            config_data = load_config_file(args.config)
+            config = Config.from_dict(config_data)
+        else:
+            # Create default config
+            config = Config()
+        
+        # Set resume settings
         config.resume = True
-        config.resume_from = args.resume_dir
-        config.output_dir = args.resume_dir
+        config.resume_from = args.output_dir
+        config.output_dir = args.output_dir
         
         workflow = EvalWorkflow(config=config)
         results = workflow.run()
         
         print(f"✅ Evaluation resumed and completed successfully!")
-        print(f"Results saved to: {args.resume_dir}")
+        print(f"Results saved to: {args.output_dir}")
         
         return 0
         
@@ -366,11 +372,14 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run evaluation with config file
+  # Run inference only (default mode)
   een_eval run --config eval_config.yaml
   
-  # Run inference only
-  een_eval run --config eval_config.yaml --mode inference
+  # Run full evaluation (inference + evaluation)
+  een_eval run --config eval_config.yaml --mode full
+  
+  # Run evaluation only on existing predictions
+  een_eval eval --config eval_config.yaml --output-dir results/eval_20231201_120000
   
   # Create sample configuration
   een_eval create-config --output sample_config.yaml --type basic
@@ -379,7 +388,7 @@ Examples:
   een_eval validate --config eval_config.yaml
   
   # Resume interrupted evaluation
-  een_eval resume --resume-dir ./results/eval_20231201_120000
+  een_eval resume --output-dir results/eval_20231201_120000 --config eval_config.yaml
   
   # List available components
   een_eval list-components
@@ -396,28 +405,34 @@ Examples:
     parser.add_argument("--verbose", "-v", 
                        action="store_true",
                        help="Enable verbose output")
+      # Create shared parent parsers for common arguments
+    config_parent = argparse.ArgumentParser(add_help=False)
+    config_parent.add_argument("--config", "-c", 
+                              help="Configuration file path")
+    
+    execution_parent = argparse.ArgumentParser(add_help=False)
+    execution_parent.add_argument("--output-dir", "-o", 
+                                 help="Output directory (overrides config)")
+    execution_parent.add_argument("--batch-size", 
+                                 type=int,
+                                 help="Batch size (overrides config)")
+    execution_parent.add_argument("--max-parallel", 
+                                 type=int,
+                                 help="Maximum parallel processes (overrides config)")
     
     # Create subcommands
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
+
     # Run command
-    run_parser = subparsers.add_parser("run", help="Run evaluation")
-    run_parser.add_argument("--config", "-c", 
-                           help="Configuration file path")
+    run_parser = subparsers.add_parser("run", 
+                                      parents=[config_parent, execution_parent],
+                                      help="Run evaluation")
     run_parser.add_argument("--mode", 
                            choices=["inference", "evaluation", "full"], 
-                           default="full",
+                           default="inference",
                            help="Evaluation mode")
-    run_parser.add_argument("--output-dir", "-o", 
-                           help="Output directory (overrides config)")
-    run_parser.add_argument("--batch-size", 
-                           type=int,
-                           help="Inference batch size (overrides config)")
-    run_parser.add_argument("--max-parallel", 
-                           type=int,
-                           help="Maximum parallel processes (overrides config)")
     
-    # Arguments for minimal config creation
+    # Arguments for minimal config creation (only for run command)
     run_parser.add_argument("--dataset", 
                            help="Dataset file path (required if no config)")
     run_parser.add_argument("--input-field", 
@@ -435,6 +450,27 @@ Examples:
     run_parser.add_argument("--max-tokens", 
                            type=int,
                            help="Maximum tokens for model generation")
+      # Eval command (shorthand for run --mode evaluation)
+    eval_parser = subparsers.add_parser("eval", 
+                                       parents=[config_parent],
+                                       help="Run evaluation only (equivalent to run --mode evaluation)")
+    eval_parser.add_argument("--output-dir", "-o", 
+                            required=True,
+                            help="Output directory containing predictions (required)")
+    eval_parser.add_argument("--batch-size", 
+                            type=int,
+                            help="Batch size (overrides config)")
+    eval_parser.add_argument("--max-parallel", 
+                            type=int,
+                            help="Maximum parallel processes (overrides config)")
+    
+    # Resume command
+    resume_parser = subparsers.add_parser("resume", 
+                                         parents=[config_parent],
+                                         help="Resume interrupted evaluation")
+    resume_parser.add_argument("--output-dir", "-o", 
+                              required=True,
+                              help="Directory containing evaluation state")
     
     # Create config command
     config_parser = subparsers.add_parser("create-config", 
@@ -446,20 +482,12 @@ Examples:
                               choices=["basic", "vllm"], 
                               default="basic",
                               help="Type of configuration to create")
-    
     # Validate command
     validate_parser = subparsers.add_parser("validate", 
-                                          help="Validate configuration file")
+                                           help="Validate configuration file")
     validate_parser.add_argument("--config", "-c", 
                                 required=True,
                                 help="Configuration file to validate")
-    
-    # Resume command
-    resume_parser = subparsers.add_parser("resume", 
-                                        help="Resume interrupted evaluation")
-    resume_parser.add_argument("--resume-dir", "-r", 
-                              required=True,
-                              help="Directory containing evaluation state")
     
     # List components command
     subparsers.add_parser("list-components", 
@@ -470,9 +498,13 @@ Examples:
     
     # Set up logging
     setup_logging(args.log_level, args.log_file)
-    
+
     # Execute command
     if args.command == "run":
+        return run_evaluation(args)
+    elif args.command == "eval":
+        # Set mode to evaluation for eval command
+        args.mode = "evaluation"
         return run_evaluation(args)
     elif args.command == "create-config":
         try:

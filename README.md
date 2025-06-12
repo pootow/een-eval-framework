@@ -250,8 +250,7 @@ Quick reference:
 ```bash
 een_eval create-config --output config.yaml
 een_eval validate --config config.yaml  
-een_eval run --config config.yaml
-een_eval resume --resume-dir results/eval_xyz
+een_eval run -c config.yaml
 een_eval list-components
 ```
 
