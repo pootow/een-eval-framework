@@ -62,7 +62,8 @@ Issues = "https://github.com/example/een_eval/issues"
 een-eval = "een_eval.cli:main"
 
 [tool.setuptools]
-packages = ["een_eval", "een_eval.core", "een_eval.workflow", "een_eval.utils"]
+package-dir = { "" = "src" }
+packages = {find = {where = ["src"]}}
 
 [tool.setuptools.dynamic]
 version = {attr = "een_eval.__version__"}

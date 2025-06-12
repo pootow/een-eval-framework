@@ -15,22 +15,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import yaml
 
-try:
-    # Try relative imports first (when run as module)
-    from .workflow.workflow import EvalWorkflow
-    from .workflow.config import Config
-    from .core.models import ModelConfig
-    from .core.evaluation import BuiltInEvaluationMethod
-    from .core.metrics import BuiltInMetric
-    from .utils.validation import ConfigValidator
-except ImportError:
-    # Fall back to absolute imports (when run directly)
-    from workflow.workflow import EvalWorkflow
-    from workflow.config import Config
-    from core.models import ModelConfig
-    from core.evaluation import BuiltInEvaluationMethod
-    from core.metrics import BuiltInMetric
-    from utils.validation import ConfigValidator
+from .workflow.workflow import EvalWorkflow
+from .workflow.config import Config
+from .core.models import ModelConfig
+from .core.evaluation import BuiltInEvaluationMethod
+from .core.metrics import BuiltInMetric
+from .utils.validation import ConfigValidator
 
 
 def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> None:
