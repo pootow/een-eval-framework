@@ -40,15 +40,14 @@ class Metric(ABC):
         self.facets = facets or []
         self.params = params
     
-    @abstractmethod
     def calculate(
         self, 
         evaluation_results: List[Dict[str, Any]],
         facets: Optional[List[str]] = None,
         **kwargs
-    ) -> Union[List[MetricResult], List[Dict[str, Any]]]:
+    ) -> List[Dict[str, Any]]:
         """
-        Calculate metric from evaluation results.
+        Calculate metric from evaluation results with automatic facets support.
         
         Args:
             evaluation_results: List of evaluation results from all samples
@@ -56,7 +55,65 @@ class Metric(ABC):
             **kwargs: Additional context or parameters
             
         Returns:
-            MetricResult or list of metric records for different facet combinations
+            List of metric records for different facet combinations
+        """
+        used_facets = facets or self.facets
+        
+        # Always include label as an implicit facet for grouping
+        # Group by facets and calculate for each group
+        grouped = self._group_by_facets(evaluation_results, used_facets)
+        
+        results = []
+        for facet_key, items_dict in grouped.items():
+            # Flatten all results for this facet combination
+            all_results = []
+            for item_results in items_dict.values():
+                all_results.extend(item_results)
+            
+            if not all_results:
+                continue
+                
+            # Calculate metric for this facet group
+            group_result = self._calculate_single(all_results, **kwargs)
+            # Parse facet values and create result dict
+            facet_dict: Dict[str, Any] = {"facets": used_facets}
+            facet_values = facet_key.split('+')
+            for i, facet in enumerate(used_facets):
+                if i < len(facet_values) - 1:  # Exclude label facet
+                    facet_dict[facet] = facet_values[i]
+
+            # Add label as separate field
+            if len(facet_values) > len(used_facets):
+                facet_dict["label"] = facet_values[-1]
+            
+            # Merge group result with facet information
+            if isinstance(group_result, dict):
+                final_result = {**facet_dict, **group_result, "metric_name": self.name}
+            else:
+                final_result = {**facet_dict, "value": group_result, "metric_name": self.name}
+                
+            results.append(final_result)
+        
+        return results
+    
+    @abstractmethod
+    def _calculate_single(
+        self, 
+        evaluation_results: List[Dict[str, Any]],
+        **kwargs
+    ) -> Union[Dict[str, Any], float, int]:
+        """
+        Calculate metric for a single group of evaluation results.
+        
+        This method should be implemented by subclasses to perform the actual
+        metric calculation on a homogeneous group of results (same facet values).
+        
+        Args:
+            evaluation_results: List of evaluation results from the same facet group
+            **kwargs: Additional context or parameters
+            
+        Returns:
+            Either a dict with metric fields or a single numeric value
         """
         pass
     
@@ -135,11 +192,11 @@ class Metric(ABC):
                     facet_values.append(str(result.get(facet, "unknown")))
             
             # Also add label as a facet
-            facet_values.append(result.get("label", "unknown"))
+            facet_values.append(result.get("label", ""))
             facet_key = "+".join(facet_values)
 
             # Group by item_id within each facet combination
-            item_id = result.get("item_id", "unknown")
+            item_id = result.get("item_id", "")
             grouped[facet_key][item_id].append(result)
         
         return dict(grouped)
@@ -152,42 +209,32 @@ class CustomMetric(Metric):
         super().__init__(name, facets, **params)
         self.function = function
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> Union[List[MetricResult], List[Dict[str, Any]]]:
+    ) -> Union[Dict[str, Any], float, int]:
         """Calculate using custom function."""
-        used_facets = facets or self.facets
-        
         try:
-            # Call the custom function
+            # Call the custom function - note: we pass empty facets since grouping is handled by base class
             result = self.function(
                 evaluation_results=evaluation_results,
-                facets=used_facets,
+                facets=[],  # Custom functions don't need to handle facets anymore
                 **self.params,
                 **kwargs
             )
             
-            if isinstance(result, list):
-                return result
+            if isinstance(result, list) and len(result) > 0:
+                # Return the first result, framework handles facets
+                return result[0]
             elif isinstance(result, dict):
-                return [result]
+                return result
             elif isinstance(result, MetricResult):
-                return [result]
+                return result.to_dict()
             else:
-                return [MetricResult(
-                    metric_name=self.name,
-                    value=result,
-                    metadata={"facets": used_facets}
-                )]
+                return {"value": result}
         except Exception as e:
-            return [MetricResult(
-                metric_name=self.name,
-                value=0.0,
-                metadata={"error": str(e), "facets": used_facets}
-            )]
+            return {"value": 0.0, "error": str(e)}
 
 
 class BuiltInMetric(Metric):
@@ -220,60 +267,36 @@ class PassAtKMetric(Metric):
         self.num_samples = num_samples
         self.aggregation = aggregation
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[Dict[str, Any]]:
-        """Calculate pass@k metric grouped by facets."""
-        used_facets = facets or self.facets
+    ) -> Dict[str, Any]:
+        """Calculate pass@k metric for a single group."""
+        # Group by item_id within this facet group
+        items_dict = self._group_by_item_id(evaluation_results)
         
-        if not used_facets:
-            # No facets, calculate overall pass@k
-            grouped = {"overall": self._group_by_item_id(evaluation_results)}
+        pass_at_k_values = []
+        total_samples = 0
+        
+        for item_id, item_results in items_dict.items():
+            # Check if at least k samples passed for this item
+            passed_samples = [r for r in item_results if r.get("passed", False)]
+            item_passes_at_k = len(passed_samples) >= self.k
+            pass_at_k_values.append(1.0 if item_passes_at_k else 0.0)
+            total_samples += len(item_results)
+        
+        if self.aggregation == "mean":
+            pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
         else:
-            # Group by facets
-            grouped = self._group_by_facets(evaluation_results, used_facets)
+            pass_at_k = sum(pass_at_k_values) / len(pass_at_k_values) if pass_at_k_values else 0.0
         
-        results = []
-        for facet_key, items_dict in grouped.items():
-            pass_at_k_values = []
-            total_samples = 0
-            
-            for item_id, item_results in items_dict.items():
-                # Check if at least k samples passed for this item
-                passed_samples = [r for r in item_results if r.get("passed", False)]
-                item_passes_at_k = len(passed_samples) >= self.k
-                pass_at_k_values.append(1.0 if item_passes_at_k else 0.0)
-                total_samples += len(item_results)
-            
-            if self.aggregation == "mean":
-                pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
-            else:
-                pass_at_k = sum(pass_at_k_values) / len(pass_at_k_values) if pass_at_k_values else 0.0
-            
-            # Parse facet values
-            facet_dict = {}
-            if used_facets and facet_key != "overall":
-                facet_values = facet_key.split('+')
-                for i, facet in enumerate(used_facets):
-                    if i < len(facet_values) - 1:  # Exclude label facet
-                        facet_dict[facet] = facet_values[i]
-                # Add label as separate field
-                if len(facet_values) > len(used_facets):
-                    facet_dict["label"] = facet_values[-1]
-            
-            result = {
-                **facet_dict,
-                f"pass_at_{self.k}": pass_at_k,
-                "average_sample_count": total_samples / len(items_dict) if items_dict else 0,
-                "total_sample_count": total_samples,
-                "total_item_count": len(items_dict)
-            }
-            results.append(result)
-        
-        return results
+        return {
+            f"pass_at_{self.k}": pass_at_k,
+            "average_sample_count": total_samples / len(items_dict) if items_dict else 0,
+            "total_sample_count": total_samples,
+            "total_item_count": len(items_dict)
+        }
     
     def _group_by_item_id(self, evaluation_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """Group results by item_id only."""
@@ -290,53 +313,19 @@ class MeanMetric(Metric):
     def __init__(self, facets: Optional[List[str]] = None, **params):
         super().__init__("mean", facets, **params)
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[Dict[str, Any]]:
-        """Calculate mean score grouped by facets."""
-        used_facets = facets or self.facets
+    ) -> Dict[str, Any]:
+        """Calculate mean score for a single group."""
+        scores = [r.get("score", 0.0) for r in evaluation_results]
+        mean_score = statistics.mean(scores) if scores else 0.0
         
-        if not used_facets:
-            # No facets, calculate overall mean
-            scores = [r.get("score", 0.0) for r in evaluation_results]
-            mean_score = statistics.mean(scores) if scores else 0.0
-            return [{"mean": mean_score, "sample_count": len(scores)}]
-        else:
-            # Group by facets
-            grouped = self._group_by_facets(evaluation_results, used_facets)
-            
-            results = []
-            for facet_key, items_dict in grouped.items():
-                # Flatten all results for this facet combination
-                all_results = []
-                for item_results in items_dict.values():
-                    all_results.extend(item_results)
-                
-                scores = [r.get("score", 0.0) for r in all_results]
-                mean_score = statistics.mean(scores) if scores else 0.0
-                
-                # Parse facet values
-                facet_dict = {}
-                if facet_key != "overall":
-                    facet_values = facet_key.split('+')
-                    for i, facet in enumerate(used_facets):
-                        if i < len(facet_values) - 1:  # Exclude label facet
-                            facet_dict[facet] = facet_values[i]
-                    # Add label as separate field
-                    if len(facet_values) > len(used_facets):
-                        facet_dict["label"] = facet_values[-1]
-                
-                result = {
-                    **facet_dict,
-                    "mean": mean_score,
-                    "sample_count": len(scores)
-                }
-                results.append(result)
-            
-            return results
+        return {
+            "mean": mean_score,
+            "sample_count": len(scores)
+        }
 
 
 class MedianMetric(Metric):
@@ -345,21 +334,19 @@ class MedianMetric(Metric):
     def __init__(self, facets: Optional[List[str]] = None, **params):
         super().__init__("median", facets, **params)
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[MetricResult]:
-        """Calculate median score."""
+    ) -> Dict[str, Any]:
+        """Calculate median score for a single group."""
         scores = [r.get("score", 0.0) for r in evaluation_results]
         median_score = statistics.median(scores) if scores else 0.0
         
-        return [MetricResult(
-            metric_name=self.name,
-            value=median_score,
-            metadata={"sample_count": len(scores)}
-        )]
+        return {
+            "median": median_score,
+            "sample_count": len(scores)
+        }
 
 
 class PercentileMetric(Metric):
@@ -369,13 +356,12 @@ class PercentileMetric(Metric):
         super().__init__("percentile", facets, **params)
         self.percentile = percentile
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[MetricResult]:
-        """Calculate percentile score."""
+    ) -> Dict[str, Any]:
+        """Calculate percentile score for a single group."""
         scores = [r.get("score", 0.0) for r in evaluation_results]
         
         if not scores:
@@ -390,11 +376,10 @@ class PercentileMetric(Metric):
                 upper = scores[int(index) + 1]
                 percentile_score = lower + (upper - lower) * (index - int(index))
         
-        return [MetricResult(
-            metric_name=self.name,
-            value=percentile_score,
-            metadata={"percentile": self.percentile, "sample_count": len(scores)}
-        )]
+        return {
+            f"percentile_{self.percentile}": percentile_score,
+            "sample_count": len(scores)
+        }
 
 
 class PassRateMetric(Metric):
@@ -403,22 +388,21 @@ class PassRateMetric(Metric):
     def __init__(self, facets: Optional[List[str]] = None, **params):
         super().__init__("pass_rate", facets, **params)
     
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[MetricResult]:
-        """Calculate pass rate."""
+    ) -> Dict[str, Any]:
+        """Calculate pass rate for a single group."""
         passed_count = sum(1 for r in evaluation_results if r.get("passed", False))
         total_count = len(evaluation_results)
         pass_rate = passed_count / total_count if total_count > 0 else 0.0
         
-        return [MetricResult(
-            metric_name=self.name,
-            value=pass_rate,
-            metadata={"passed_count": passed_count, "total_count": total_count}
-        )]
+        return {
+            "pass_rate": pass_rate,
+            "passed_count": passed_count,
+            "total_count": total_count
+        }
 
 
 class CountMetric(Metric):
@@ -427,18 +411,15 @@ class CountMetric(Metric):
     def __init__(self, facets: Optional[List[str]] = None, **params):
         super().__init__("count", facets, **params)
 
-    def calculate(
+    def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
-        facets: Optional[List[str]] = None,
         **kwargs
-    ) -> List[MetricResult]:
-        """Calculate count."""
-        return [MetricResult(
-            metric_name=self.name,
-            value=len(evaluation_results),
-            metadata={}
-        )]
+    ) -> Dict[str, Any]:
+        """Calculate count for a single group."""
+        return {
+            "count": len(evaluation_results)
+        }
 
 
 def _load_function_from_file(file_path: str, function_name: str) -> Callable:
