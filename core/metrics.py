@@ -62,14 +62,9 @@ class Metric(ABC):
         # Always include label as an implicit facet for grouping
         # Group by facets and calculate for each group
         grouped = self._group_by_facets(evaluation_results, used_facets)
-        
+
         results = []
-        for facet_key, items_dict in grouped.items():
-            # Flatten all results for this facet combination
-            all_results = []
-            for item_results in items_dict.values():
-                all_results.extend(item_results)
-            
+        for facet_key, all_results in grouped.items():
             if not all_results:
                 continue
                 
@@ -163,19 +158,18 @@ class Metric(ABC):
                 raise ValueError("Custom metric requires either 'path' or 'module'+'function_name'")
         else:
             raise ValueError(f"Unknown metric type: {config.type}")
-
     def _group_by_facets(
         self, 
         evaluation_results: List[Dict[str, Any]], 
         facets: List[str]
-    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Group evaluation results by facets and item_id.
+        Group evaluation results by facets and label.
         
         Returns:
-            Dict with facet combinations as keys, each containing dict of item_id -> list of results
+            Dict with facet combinations as keys, each containing flat list of results
         """
-        grouped = defaultdict(lambda: defaultdict(list))
+        grouped = defaultdict(list)
         
         for result in evaluation_results:
             # Build facet key
@@ -195,9 +189,8 @@ class Metric(ABC):
             facet_values.append(result.get("label", ""))
             facet_key = "+".join(facet_values)
 
-            # Group by item_id within each facet combination
-            item_id = result.get("item_id", "")
-            grouped[facet_key][item_id].append(result)
+            # Add result to the flat list for this facet combination
+            grouped[facet_key].append(result)
         
         return dict(grouped)
 
