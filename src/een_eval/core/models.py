@@ -12,6 +12,7 @@ from enum import Enum
 import openai
 import requests
 import time
+import random
 
 
 class ModelType(Enum):
@@ -389,6 +390,27 @@ class MockModel(ModelInterface):
     def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
         """Generate mock response."""
         start_time = time.time()
+        
+        # Check for failure_rate configuration to randomly throw exceptions
+        if hasattr(self.config, 'extra_params') and self.config.extra_params:
+            failure_rate = self.config.extra_params.get('failure_rate', 0.0)
+            if random.random() < failure_rate:
+                # Simulate different types of failures that might occur
+                failure_types = [
+                    "ConnectionError: Mock network failure",
+                    "TimeoutError: Mock request timeout",
+                    "RuntimeError: Mock internal server error",
+                    "ValueError: Mock invalid parameters",
+                    "APIError: Mock API rate limit exceeded"
+                ]
+                error_msg = random.choice(failure_types)
+                return SimpleInferenceResult(
+                    response="",
+                    prompt=prompt,
+                    inference_time=time.time() - start_time,
+                    model_name=self.config.name,
+                    error=error_msg
+                )
         
         # Cycle through predefined responses
         response = self.responses[self.call_count % len(self.responses)]

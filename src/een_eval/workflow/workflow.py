@@ -272,7 +272,7 @@ class EvalWorkflow:
             self._config = Config.from_dict(config)
         else:
             self._config = config
-        
+
         # Apply configuration
         if self._config.models:
             self._set_models(self._config.models)
@@ -288,6 +288,11 @@ class EvalWorkflow:
             self._eval_prompt_template = self._config.eval_prompt_template
         if self._config.output_dir:
             self._output_dir = self._config.output_dir
+        if hasattr(self._config, 'resume'):
+            self._resume = self._config.resume
+        if hasattr(self._config, 'mode'):
+            self._mode = self._config.mode
+        # REVIEW: find if any other parameters forget to apply from config
     
     def _set_models(self, models: List[Union[str, Model, ModelConfig]]) -> None:
         """Set models for evaluation."""
@@ -371,7 +376,8 @@ class EvalWorkflow:
             dataset=self._dataset,
             sample_params=self._sample_params,
             prompt_template=self._eval_prompt_template,
-            output_manager=self._output_manager
+            output_manager=self._output_manager,
+            resume=self._resume
         )
         
         self._evaluation_engine = EvaluationEngine(

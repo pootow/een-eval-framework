@@ -5,12 +5,10 @@ This module handles model inference execution, prompt processing,
 and response collection with support for batching and resumption.
 """
 
-import asyncio
 import time
 import logging
-from typing import Dict, List, Any, Optional, Iterator
+from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
 import jinja2
 
 from ..core.models import Model, InferenceResult
@@ -65,7 +63,8 @@ class InferenceEngine:
         prompt_template: Optional[str] = None,
         output_manager: Optional[OutputManager] = None,
         batch_size: int = 1,
-        max_workers: int = 4
+        max_workers: int = 4,
+        resume: bool = False
     ):
         self.models = models
         self.dataset = dataset
@@ -75,12 +74,86 @@ class InferenceEngine:
         self.output_manager = output_manager
         self.batch_size = batch_size
         self.max_workers = max_workers
+        self.resume = resume
         self.logger = logging.getLogger(__name__)
         
         # State tracking
         self.completed_samples = 0
         self.total_samples = len(dataset) * len(models) * self.num_samples
         self.start_time: Optional[float] = None
+
+        # Resume tracking - load existing responses if resuming
+        self.existing_responses: Dict[str, InferenceResult] = {}
+        if self.resume and self.output_manager:
+            self._load_existing_responses()
+    
+    def _load_existing_responses(self) -> None:
+        """Load existing responses for resume functionality."""
+        if not self.output_manager:
+            return
+        
+        try:
+            responses = self.output_manager.load_responses()
+            successful_responses = []
+            failed_responses = []
+            
+            for response_data in responses:
+                # Create key for tracking: "{model_name}_{item_id}_{sample_index}"
+                key = f"{response_data.get('model_name')}_{response_data.get('item_id')}_{response_data.get('sample_index')}"
+                
+                # Convert dict back to InferenceResult
+                result = InferenceResult(
+                    item_id=response_data.get('item_id', ''),
+                    sample_id=response_data.get('sample_id', ''),
+                    sample_index=response_data.get('sample_index', 0),
+                    total_samples=response_data.get('total_samples', 1),
+                    model_name=response_data.get('model_name', ''),
+                    prompt=response_data.get('prompt', ''),
+                    response=response_data.get('response', ''),
+                    inference_time=response_data.get('inference_time', 0.0),
+                    timestamp=response_data.get('timestamp', 0.0),
+                    ground_truth=response_data.get('ground_truth'),
+                    metadata=response_data.get('metadata', {}),
+                    error=response_data.get('error'),
+                    tokens_per_second=response_data.get('tokens_per_second'),
+                    total_tokens=response_data.get('total_tokens'),
+                    prompt_tokens=response_data.get('prompt_tokens'),
+                    completion_tokens=response_data.get('completion_tokens')
+                )
+                
+                # Separate successful and failed responses
+                if not result.error:
+                    self.existing_responses[key] = result
+                    successful_responses.append(response_data)
+                else:
+                    failed_responses.append(response_data)
+              # Save failed responses to separate file if any exist
+            if failed_responses:
+                self.output_manager.save_failed_responses(failed_responses)
+            
+            # Rewrite responses.jsonl with only successful responses
+            if successful_responses:
+                self.output_manager.rewrite_responses_file(successful_responses)
+            else:
+                # Clear the responses file if no successful responses
+                self.output_manager.clear_responses_file()
+                    
+            self.logger.info(f"Loaded {len(self.existing_responses)} existing successful responses for resume")
+            if failed_responses:
+                self.logger.info(f"Moved {len(failed_responses)} failed responses to failed_responses.jsonl")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to load existing responses for resume: {e}")
+    
+    def _is_sample_completed(self, model_name: str, item_id: str, sample_index: int) -> bool:
+        """Check if a specific sample is already completed successfully."""
+        key = f"{model_name}_{item_id}_{sample_index}"
+        return key in self.existing_responses
+    
+    def _get_existing_sample(self, model_name: str, item_id: str, sample_index: int) -> Optional[InferenceResult]:
+        """Get existing sample result if available."""
+        key = f"{model_name}_{item_id}_{sample_index}"
+        return self.existing_responses.get(key)
     
     def run(self, status) -> Dict[str, Any]:
         """Run inference on all models and dataset items."""
@@ -88,16 +161,16 @@ class InferenceEngine:
         self.start_time = time.time()
         
         # Save inference metadata
+        metadata = {
+            "start_time": time.time(),
+            "models": [model.name for model in self.models],
+            "dataset_size": len(self.dataset),
+            "sample_params": self.sample_params,
+            "prompt_template": self.prompt_processor.template,
+            "batch_size": self.batch_size,
+            "max_workers": self.max_workers
+        }
         if self.output_manager:
-            metadata = {
-                "start_time": time.time(),
-                "models": [model.name for model in self.models],
-                "dataset_size": len(self.dataset),
-                "sample_params": self.sample_params,
-                "prompt_template": self.prompt_processor.template,
-                "batch_size": self.batch_size,
-                "max_workers": self.max_workers
-            }
             self.output_manager.save_inference_metadata(metadata)
         
         results = []
@@ -118,7 +191,11 @@ class InferenceEngine:
         # Calculate final statistics
         total_time = time.time() - self.start_time
         stats = self._calculate_stats(results, total_time)
-        
+
+        # merge stats with metadata and save
+        if self.output_manager:
+            self.output_manager.save_inference_metadata({**metadata, **stats})
+
         self.logger.info(f"Inference completed in {total_time:.2f}s")
         return {
             "results": results,
@@ -153,7 +230,8 @@ class InferenceEngine:
         self, 
         model: Model, 
         batches: List[List[DatasetItem]], 
-        status    ) -> List[InferenceResult]:
+        status    
+    ) -> List[InferenceResult]:
         """Run inference sequentially."""
         results = []
         
@@ -162,11 +240,14 @@ class InferenceEngine:
             results.extend(batch_results)
             
             # Update status and save intermediate results
-            self.completed_samples += len(batch) * self.num_samples
+            self.completed_samples += len(batch_results)
             status.processed_samples = self.completed_samples
             
             if self.output_manager:
-                self.output_manager.save_responses_batch(batch_results)
+                # Only save new results (not existing ones)
+                new_results = [r for r in batch_results if r not in self.existing_responses.values()]
+                if new_results:
+                    self.output_manager.save_responses_batch(new_results)
                 self.output_manager.save_status(status)
         
         return results
@@ -195,11 +276,14 @@ class InferenceEngine:
                     results.extend(batch_results)
                     
                     # Update status and save intermediate results
-                    self.completed_samples += len(batch) * self.num_samples
+                    self.completed_samples += len(batch_results)
                     status.processed_samples = self.completed_samples
                     
                     if self.output_manager:
-                        self.output_manager.save_responses_batch(batch_results)
+                        # Only save new results (not existing ones)
+                        new_results = [r for r in batch_results if r not in self.existing_responses.values()]
+                        if new_results:
+                            self.output_manager.save_responses_batch(new_results)
                         self.output_manager.save_status(status)
                         
                 except Exception as e:
@@ -215,6 +299,14 @@ class InferenceEngine:
         for item in batch:
             # Generate multiple samples for each item
             for sample_idx in range(self.num_samples):
+                # Check if sample already exists when resuming
+                if self.resume and self._is_sample_completed(model.name, item.id, sample_idx):
+                    existing_result = self._get_existing_sample(model.name, item.id, sample_idx)
+                    if existing_result:
+                        batch_results.append(existing_result)
+                        self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
+                        continue
+                
                 prompt = ""
                 try:
                     # Process prompt

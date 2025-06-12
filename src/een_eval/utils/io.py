@@ -47,8 +47,8 @@ class OutputManager:
     def save_inference_metadata(self, metadata: Dict[str, Any]) -> None:
         """Save inference metadata."""
         try:
-            # Append to inference file
-            with open(self.inference_file, 'a', encoding='utf-8') as f:
+            # Overwrite inference file
+            with open(self.inference_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
                 f.write('\n')
             self.logger.debug("Saved inference metadata")
@@ -345,3 +345,35 @@ class OutputManager:
                     self.logger.warning(f"Failed to clean intermediate file {file_path}: {e}")
         
         self.logger.info("Output files cleaned for fresh start")
+    
+    def save_failed_responses(self, failed_responses: List[Dict[str, Any]]) -> None:
+        """Save failed responses to a separate file."""
+        try:
+            failed_file = self.output_dir / "failed_responses.jsonl"
+            with open(failed_file, 'a', encoding='utf-8') as f:
+                for response in failed_responses:
+                    json.dump(response, f, ensure_ascii=False, default=str)
+                    f.write('\n')
+            self.logger.debug(f"Appended {len(failed_responses)} failed responses to {failed_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to save failed responses: {e}")
+    
+    def rewrite_responses_file(self, responses: List[Dict[str, Any]]) -> None:
+        """Rewrite responses.jsonl with provided responses."""
+        try:
+            with open(self.responses_file, 'w', encoding='utf-8') as f:
+                for response in responses:
+                    json.dump(response, f, ensure_ascii=False, default=str)
+                    f.write('\n')
+            self.logger.debug(f"Rewrote responses.jsonl with {len(responses)} responses")
+        except Exception as e:
+            self.logger.error(f"Failed to rewrite responses file: {e}")
+    
+    def clear_responses_file(self) -> None:
+        """Clear the responses.jsonl file."""
+        try:
+            with open(self.responses_file, 'w', encoding='utf-8') as f:
+                pass  # Just create empty file
+            self.logger.debug("Cleared responses.jsonl file")
+        except Exception as e:
+            self.logger.error(f"Failed to clear responses file: {e}")
