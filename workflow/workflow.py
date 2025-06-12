@@ -346,14 +346,26 @@ class EvalWorkflow:
         if not self._output_dir:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._output_dir = f"output/{timestamp}"
-        
+
         self._output_manager = OutputManager(self._output_dir)
         
-        # Try to resume if requested
+        # Try to resume if requested, otherwise clean output files for fresh start
+        # Only clean files when starting fresh inference (not evaluation)
         if self._resume:
+            # TODO: Test resume logic, ensure it
+            # - won't overwrite existing data
+            # - can handle partial runs, recovering from errors
+            # - won't generate data more than needed
             self._try_resume()
-        
+        elif self._mode == "inference":
+            # Clean output files to avoid reading data from previous runs
+            # Only when starting fresh inference - evaluation mode needs previous inference data
+            self._output_manager.clean_output_files()
+
         # Setup engines
+        if not self._dataset:
+            raise ValueError("Dataset must be specified")
+        
         self._inference_engine = InferenceEngine(
             models=self._models,
             dataset=self._dataset,
@@ -375,10 +387,13 @@ class EvalWorkflow:
                 total_samples=len(self._dataset) * len(self._models) if self._dataset else 0,
                 start_time=datetime.now()
             )
-    
+
     def _try_resume(self) -> None:
         """Attempt to resume from previous run."""
         try:
+            if not self._output_dir:
+                return
+            
             status_file = Path(self._output_dir) / "status.json"
             if status_file.exists():
                 with open(status_file, 'r') as f:
@@ -392,11 +407,16 @@ class EvalWorkflow:
                 self._logger.info(f"Resumed from {self._status.processed_samples}/{self._status.total_samples} samples")
         except Exception as e:
             self._logger.warning(f"Could not resume from previous run: {e}")
-    
+
     def _run_inference(self) -> Dict[str, Any]:
         """Run inference mode."""
         self._logger.info("Starting inference mode")
         self._status.mode = "inference"
+        
+        if not self._inference_engine:
+            raise ValueError("Inference engine not initialized")
+        if not self._output_manager:
+            raise ValueError("Output manager not initialized")
         
         results = self._inference_engine.run(self._status)
         
@@ -409,6 +429,11 @@ class EvalWorkflow:
         """Run evaluation mode."""
         self._logger.info("Starting evaluation mode")
         self._status.mode = "evaluation"
+        
+        if not self._evaluation_engine:
+            raise ValueError("Evaluation engine not initialized")
+        if not self._output_manager:
+            raise ValueError("Output manager not initialized")
         
         results = self._evaluation_engine.run(self._status)
         

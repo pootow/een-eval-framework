@@ -125,8 +125,8 @@ class InferenceEngine:
             "statistics": stats,
             "status": status.to_dict()
         }
-    
-    def _run_model_inference(self, model: Model, status) -> List[Dict[str, Any]]:
+
+    def _run_model_inference(self, model: Model, status) -> List[InferenceResult]:
         """Run inference for a single model on all dataset items."""
         model_results = []
         
@@ -148,12 +148,12 @@ class InferenceEngine:
             batch = self.dataset[i:i + self.batch_size]
             batches.append(batch)
         return batches
-    
+
     def _run_sequential_inference(
         self, 
         model: Model, 
         batches: List[List[DatasetItem]], 
-        status    ) -> List[Dict[str, Any]]:
+        status    ) -> List[InferenceResult]:
         """Run inference sequentially."""
         results = []
         
@@ -170,13 +170,13 @@ class InferenceEngine:
                 self.output_manager.save_status(status)
         
         return results
-    
+
     def _run_parallel_inference(
         self, 
         model: Model, 
         batches: List[List[DatasetItem]], 
         status
-    ) -> List[Dict[str, Any]]:
+    ) -> List[InferenceResult]:
         """Run inference in parallel."""
         results = []
         
@@ -195,7 +195,7 @@ class InferenceEngine:
                     results.extend(batch_results)
                     
                     # Update status and save intermediate results
-                    self.completed_samples += len(batch)
+                    self.completed_samples += len(batch) * self.num_samples
                     status.processed_samples = self.completed_samples
                     
                     if self.output_manager:
@@ -208,7 +208,7 @@ class InferenceEngine:
         
         return results
 
-    def _process_batch(self, model: Model, batch: List[DatasetItem]) -> List[Dict[str, Any]]:
+    def _process_batch(self, model: Model, batch: List[DatasetItem]) -> List[InferenceResult]:
         """Process a single batch of items."""
         batch_results = []
         
@@ -221,68 +221,93 @@ class InferenceEngine:
                     prompt = self.prompt_processor.process_prompt(item)
                     
                     # Generate response
-                    inference_result = model.generate(prompt, **self.sample_params)
-
-                    # Create result record with sample tracking
-                    result_data = {
-                        "item_id": item.id,
-                        "sample_id": f"{item.id}_sample_{sample_idx}",
-                        "sample_index": sample_idx,
-                        "total_samples": self.num_samples,
-                        "model_name": model.name,
-                        "prompt": prompt,
-                        "response": inference_result.response,
-                        "inference_time": inference_result.inference_time,
-                        "tokens_per_second": inference_result.tokens_per_second,
-                        "total_tokens": inference_result.total_tokens,
-                        "prompt_tokens": inference_result.prompt_tokens,
-                        "completion_tokens": inference_result.completion_tokens,
-                        "timestamp": time.time(),
-                        "ground_truth": item.data,
-                        "metadata": {
-                            "model_id": model.name,
-                            "prompt_template": self.prompt_processor.template,
-                            "sampling": self.sample_params,
-                            **inference_result.metadata
-                        }
-                    }
+                    simple_result = model.generate(prompt, **self.sample_params)
                     
-                    batch_results.append(result_data)
+                    # Create full InferenceResult
+                    if simple_result.error:
+                        # Handle error case
+                        result = InferenceResult(
+                            item_id=item.id,
+                            sample_id=f"{item.id}_sample_{sample_idx}",
+                            sample_index=sample_idx,
+                            total_samples=self.num_samples,
+                            model_name=model.name,
+                            prompt=prompt,
+                            response="",
+                            inference_time=simple_result.inference_time,
+                            timestamp=time.time(),
+                            ground_truth=item.data,
+                            error=simple_result.error,
+                            metadata={
+                                "model_id": model.name,
+                                "prompt_template": self.prompt_processor.template,
+                                "sampling": self.sample_params,
+                                **simple_result.metadata
+                            },
+                            tokens_per_second=simple_result.tokens_per_second,
+                            total_tokens=simple_result.total_tokens,
+                            prompt_tokens=simple_result.prompt_tokens,
+                            completion_tokens=simple_result.completion_tokens
+                        )
+                    else:
+                        # Success case
+                        result = InferenceResult(
+                            item_id=item.id,
+                            sample_id=f"{item.id}_sample_{sample_idx}",
+                            sample_index=sample_idx,
+                            total_samples=self.num_samples,
+                            model_name=model.name,
+                            prompt=prompt,
+                            response=simple_result.response,
+                            inference_time=simple_result.inference_time,
+                            timestamp=time.time(),
+                            ground_truth=item.data,
+                            metadata={
+                                "model_id": model.name,
+                                "prompt_template": self.prompt_processor.template,
+                                "sampling": self.sample_params,
+                                **simple_result.metadata
+                            },
+                            tokens_per_second=simple_result.tokens_per_second,
+                            total_tokens=simple_result.total_tokens,
+                            prompt_tokens=simple_result.prompt_tokens,
+                            completion_tokens=simple_result.completion_tokens
+                        )
+                    
+                    batch_results.append(result)
                     
                 except Exception as e:
-                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")                    # Create error record
-                    error_result = {
-                        "item_id": item.id,
-                        "sample_id": f"{item.id}_sample_{sample_idx}",
-                        "sample_index": sample_idx,
-                        "total_samples": self.num_samples,
-                        "model_name": model.name,
-                        "prompt": prompt,
-                        "response": "",
-                        "inference_time": 0,
-                        "tokens_per_second": 0,
-                        "timestamp": time.time(),
-                        "ground_truth": item.data,
-                        "metadata": {
+                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")
+                    # Create error result
+                    error_result = InferenceResult(
+                        item_id=item.id,
+                        sample_id=f"{item.id}_sample_{sample_idx}",
+                        sample_index=sample_idx,
+                        total_samples=self.num_samples,
+                        model_name=model.name,
+                        prompt=prompt,
+                        response="",
+                        inference_time=0.0,
+                        timestamp=time.time(),
+                        ground_truth=item.data,
+                        error=str(e),
+                        metadata={
                             "model_id": model.name,
                             "prompt_template": self.prompt_processor.template,
                             "sampling": self.sample_params
-                        },
-                        "error": str(e)
-                    }
+                        }
+                    )
                     batch_results.append(error_result)
         
         return batch_results
-        
-        return batch_results
-    
-    def _calculate_stats(self, results: List[Dict[str, Any]], total_time: float) -> Dict[str, Any]:
+
+    def _calculate_stats(self, results: List[InferenceResult], total_time: float) -> Dict[str, Any]:
         """Calculate inference statistics."""
         if not results:
             return {}
         
         # Filter successful results
-        successful_results = [r for r in results if "error" not in r]
+        successful_results = [r for r in results if r.error is None]
         
         # Basic statistics
         stats = {
@@ -296,57 +321,30 @@ class InferenceEngine:
         
         if successful_results:
             # Timing statistics
-            inference_times = [r["inference_time"] for r in successful_results]
+            inference_times = [r.inference_time for r in successful_results]
             stats.update({
                 "avg_inference_time": sum(inference_times) / len(inference_times),
                 "min_inference_time": min(inference_times),
                 "max_inference_time": max(inference_times)
             })
             
-            # Token statistics
-            total_tokens = [r.get("total_tokens", 0) for r in successful_results if r.get("total_tokens")]
-            if total_tokens:
+            # Token statistics (if available)
+            token_results = [r for r in successful_results if r.total_tokens is not None]
+            if token_results:
+                total_tokens = [r.total_tokens for r in token_results if r.total_tokens is not None]
+                tokens_per_sec = [r.tokens_per_second for r in token_results if r.tokens_per_second is not None]
+                
                 stats.update({
                     "avg_total_tokens": sum(total_tokens) / len(total_tokens),
                     "min_total_tokens": min(total_tokens),
                     "max_total_tokens": max(total_tokens),
-                    "total_tokens_generated": sum(total_tokens)
                 })
-            
-            # Speed statistics
-            speeds = [r.get("tokens_per_second", 0) for r in successful_results if r.get("tokens_per_second")]
-            if speeds:
-                stats.update({
-                    "avg_tokens_per_second": sum(speeds) / len(speeds),
-                    "min_tokens_per_second": min(speeds),
-                    "max_tokens_per_second": max(speeds)
-                })
-        
-        # Per-model statistics
-        model_stats = {}
-        for result in results:
-            model_name = result.get("model_name", "unknown")
-            if model_name not in model_stats:
-                model_stats[model_name] = {
-                    "total": 0,
-                    "successful": 0,
-                    "failed": 0,
-                    "total_time": 0
-                }
-            
-            model_stats[model_name]["total"] += 1
-            if "error" not in result:
-                model_stats[model_name]["successful"] += 1
-                model_stats[model_name]["total_time"] += result.get("inference_time", 0)
-            else:
-                model_stats[model_name]["failed"] += 1
-        
-        # Calculate per-model averages
-        for model_name, model_stat in model_stats.items():
-            if model_stat["successful"] > 0:
-                model_stat["avg_time"] = model_stat["total_time"] / model_stat["successful"]
-                model_stat["success_rate"] = model_stat["successful"] / model_stat["total"]
-        
-        stats["per_model"] = model_stats
+                
+                if tokens_per_sec:
+                    stats.update({
+                        "avg_tokens_per_second": sum(tokens_per_sec) / len(tokens_per_sec),
+                        "min_tokens_per_second": min(tokens_per_sec),
+                        "max_tokens_per_second": max(tokens_per_sec)
+                    })
         
         return stats

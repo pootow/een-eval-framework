@@ -63,17 +63,43 @@ class ModelConfig:
 
 
 @dataclass
-class InferenceResult:
-    """Result from model inference."""
+class SimpleInferenceResult:
+    """Simple result from model inference (before workflow processing)."""
     response: str
     prompt: str
     inference_time: float
-    tokens_per_second: float
     model_name: str
+    
+    # Optional fields
+    tokens_per_second: Optional[float] = None
     total_tokens: Optional[int] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+
+
+@dataclass
+class InferenceResult:
+    """Result from model inference following DataFlow.md specification."""
+    item_id: str                         # Links back to original dataset item
+    sample_id: str                       # Unique per sample: "{item_id}_sample_{index}"
+    sample_index: int                    # 0 to num_samples-1
+    total_samples: int                   # Total samples per item (= num_samples)
+    model_name: str                      # Model name (just a friendly display name)
+    prompt: str                          # Processed prompt sent to model
+    response: str                        # Model's raw response
+    inference_time: float                # Time taken for this inference
+    timestamp: float                     # When this inference was made
+    ground_truth: Optional[Dict[str, Any]] = None  # Copy from original dataset, None if not available
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional inference-specific metadata
+    error: Optional[str] = None          # Error message if inference failed
+    
+    # Additional fields for compatibility
+    tokens_per_second: Optional[float] = None
+    total_tokens: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
 
 
 class ModelInterface(ABC):
@@ -81,13 +107,13 @@ class ModelInterface(ABC):
     
     def __init__(self, config: ModelConfig):
         self.config = config
-    
+
     @abstractmethod
     def generate(
         self, 
         prompt: str, 
         **kwargs
-    ) -> InferenceResult:
+    ) -> SimpleInferenceResult:
         """Generate response for a prompt."""
         pass
     
@@ -116,8 +142,8 @@ class OpenAIModel(ModelInterface):
             api_key=config.api_key,
             base_url=config.endpoint
         )
-    
-    def generate(self, prompt: str, **kwargs) -> InferenceResult:
+
+    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
         """Generate response using OpenAI API."""
         start_time = time.time()
         
@@ -146,7 +172,7 @@ class OpenAIModel(ModelInterface):
             total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
             tokens_per_second = total_tokens / inference_time if total_tokens else 0
             
-            return InferenceResult(
+            return SimpleInferenceResult(
                 response=content,
                 prompt=prompt,
                 inference_time=inference_time,
@@ -161,7 +187,13 @@ class OpenAIModel(ModelInterface):
                 }
             )
         except Exception as e:
-            raise RuntimeError(f"OpenAI API call failed: {e}")
+            return SimpleInferenceResult(
+                response="",
+                prompt=prompt,
+                inference_time=time.time() - start_time,
+                model_name=self.config.name,
+                error=f"OpenAI API call failed: {e}"
+            )
     
     def is_available(self) -> bool:
         """Check if OpenAI API is available."""
@@ -187,11 +219,17 @@ class VLLMModel(ModelInterface):
         super().__init__(config)
         self.docker_container_id: Optional[str] = None
         self.client: Optional[openai.OpenAI] = None
-        
-    def generate(self, prompt: str, **kwargs) -> InferenceResult:
+
+    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
         """Generate response using VLLM API."""
         if not self.client:
-            raise RuntimeError("VLLM model not started. Call startup() first.")
+            return SimpleInferenceResult(
+                response="",
+                prompt=prompt,
+                inference_time=0.0,
+                model_name=self.config.name,
+                error="VLLM model not started. Call startup() first."
+            )
         
         start_time = time.time()
         
@@ -220,7 +258,7 @@ class VLLMModel(ModelInterface):
             total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
             tokens_per_second = total_tokens / inference_time if total_tokens else 0
             
-            return InferenceResult(
+            return SimpleInferenceResult(
                 response=content,
                 prompt=prompt,
                 inference_time=inference_time,
@@ -235,7 +273,13 @@ class VLLMModel(ModelInterface):
                 }
             )
         except Exception as e:
-            raise RuntimeError(f"VLLM API call failed: {e}")
+            return SimpleInferenceResult(
+                response="",
+                prompt=prompt,
+                inference_time=time.time() - start_time,
+                model_name=self.config.name,
+                error=f"VLLM API call failed: {e}"
+            )
     
     def is_available(self) -> bool:
         """Check if VLLM server is available."""
@@ -341,8 +385,8 @@ class MockModel(ModelInterface):
                 "Testing with mock models ensures reproducible results.",
                 "The framework supports various model types including mocks."
             ]
-    
-    def generate(self, prompt: str, **kwargs) -> InferenceResult:
+
+    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
         """Generate mock response."""
         start_time = time.time()
         
@@ -358,7 +402,7 @@ class MockModel(ModelInterface):
         mock_tokens = len(response.split()) + len(prompt.split())
         tokens_per_second = mock_tokens / inference_time if inference_time > 0 else 0
         
-        return InferenceResult(
+        return SimpleInferenceResult(
             response=response,
             prompt=prompt,
             inference_time=inference_time,
@@ -420,8 +464,8 @@ class Model:
         """Create model from dictionary."""
         config = ModelConfig.from_dict(data)
         return cls.from_config(config)
-    
-    def generate(self, prompt: str, **kwargs) -> InferenceResult:
+
+    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
         """Generate response for a prompt."""
         return self.interface.generate(prompt, **kwargs)
     

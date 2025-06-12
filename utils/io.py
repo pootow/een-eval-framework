@@ -8,8 +8,11 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import asdict
 import logging
+
+from een_eval.core.models import InferenceResult
 
 
 class OutputManager:
@@ -61,13 +64,29 @@ class OutputManager:
                 f.write('\n')
         except Exception as e:
             self.logger.error(f"Failed to save response: {e}")
-    
-    def save_responses_batch(self, responses: List[Dict[str, Any]]) -> None:
+
+    def save_responses_batch(self, responses: List[InferenceResult]) -> None:
         """Save batch of responses."""
         try:
             with open(self.responses_file, 'a', encoding='utf-8') as f:
                 for response in responses:
-                    json.dump(response, f, ensure_ascii=False, default=str)
+                    # Convert dataclass to dict if needed
+                    response_dict = {}
+                    if hasattr(response, '__dataclass_fields__'):
+                        # It's a dataclass, convert to dict
+                        try:
+                            from dataclasses import asdict
+                            response_dict = asdict(response)
+                        except Exception:
+                            # Fallback to manual conversion
+                            response_dict = {field: getattr(response, field, None) 
+                                           for field in response.__dataclass_fields__}
+                    elif isinstance(response, dict):
+                        response_dict = response
+                    else:
+                        # Fallback: try to convert to dict
+                        response_dict = response.__dict__ if hasattr(response, '__dict__') else {"value": str(response)}
+                    json.dump(response_dict, f, ensure_ascii=False, default=str)
                     f.write('\n')
             self.logger.debug(f"Saved {len(responses)} responses")
         except Exception as e:
@@ -295,3 +314,32 @@ class OutputManager:
             self.logger.debug(f"Saved evaluation summary to {summary_file}")
         except Exception as e:
             self.logger.error(f"Failed to save evaluation summary: {e}")
+    
+    def clean_output_files(self) -> None:
+        """Clean output files to start fresh (used when resume=False)."""
+        files_to_clean = [
+            self.inference_file,
+            self.responses_file,
+            self.evaluation_file,
+            self.metrics_file,
+            self.status_file
+        ]
+        
+        for file_path in files_to_clean:
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    self.logger.debug(f"Cleaned output file: {file_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to clean output file {file_path}: {e}")
+        
+        # Also clean up any intermediate result files
+        for file_path in self.output_dir.glob("*.json"):
+            if file_path.name not in ["config.json"]:  # Keep config file
+                try:
+                    file_path.unlink()
+                    self.logger.debug(f"Cleaned intermediate file: {file_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to clean intermediate file {file_path}: {e}")
+        
+        self.logger.info("Output files cleaned for fresh start")

@@ -7,13 +7,36 @@ and applying evaluation methods and metrics to compute final scores.
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-from dataclasses import asdict
+from dataclasses import dataclass, field
 
 from ..core.evaluation import EvaluationMethod
 from ..core.metrics import Metric
+from ..core.models import InferenceResult
 from ..utils.io import OutputManager
+
+
+@dataclass 
+class FinalEvaluationResult:
+    """Final evaluation result following DataFlow.md specification."""
+    # Preserved from inference
+    item_id: str                         # Original dataset item
+    sample_id: str                       # Unique sample identifier
+    sample_index: int                    # Sample number within item
+    label: str                           # Label name (e.g., "clearness", "correctness")
+    model_name: str                      # Model name (just a friendly display name)
+    
+    # From evaluation method
+    passed: bool                         # Whether this sample passed
+    score: float                         # Numeric score (optional)
+    detailed_results: Dict[str, Any]     # Copy of "custom_fields" from evaluation method
+    
+    # Metadata
+    evaluation_time: float               # Time taken for evaluation
+    timestamp: float                     # When evaluation was performed
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional inference + evaluation metadata
 
 
 class EvaluationEngine:
@@ -116,13 +139,14 @@ class EvaluationEngine:
                         # Extract response and ground truth from the result
                         response = result.get("response", "")
                         ground_truth = result.get("ground_truth", {})
-                        
-                        # Apply evaluation method with new interface
+                          # Apply evaluation method with timing
+                        start_time = time.time()
                         evaluation_result = method.evaluate(
                             response=response, 
                             ground_truth=ground_truth, 
                             inference_result=result
                         )
+                        evaluation_time = time.time() - start_time
                         
                         # Process the labels from the evaluation result
                         if "labels" in evaluation_result:
@@ -130,7 +154,7 @@ class EvaluationEngine:
                                 label_name = label_info["label"]["name"]
                                 label_result = label_info["result"]
                                 
-                                # Create evaluation result record following DataFlow.md spec
+                                # Create evaluation result record following DataFlow.md spec TODO: make this strong typed
                                 eval_record = {
                                     # Preserved from inference
                                     "item_id": result.get("item_id"),
@@ -144,10 +168,10 @@ class EvaluationEngine:
                                     "score": label_result.get("score", 0.0),
                                     "detailed_results": {k: v for k, v in label_result.items() 
                                                        if k not in ["passed", "score"]},
-                                    
+
                                     # Metadata
-                                    "evaluation_time": 0.0,  # TODO: Add timing
-                                    "timestamp": result.get("timestamp"),
+                                    "evaluation_time": evaluation_time,
+                                    "timestamp": time.time(),
                                     "metadata": result.get("metadata", {})
                                 }
                                 
@@ -218,28 +242,6 @@ class EvaluationEngine:
                 })
         
         return all_metrics_results
-    
-    def _group_results_by_model_and_method(
-        self, 
-        evaluation_results: List[Dict[str, Any]]
-    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
-        """Group evaluation results by model and evaluation method."""
-        grouped = {}
-        
-        for result in evaluation_results:
-            model_name = result.get("model_name", "unknown")
-            
-            if model_name not in grouped:
-                grouped[model_name] = {}
-            
-            evaluations = result.get("evaluations", {})
-            for method_name, eval_data in evaluations.items():
-                if method_name not in grouped[model_name]:
-                    grouped[model_name][method_name] = []
-                
-                grouped[model_name][method_name].append(eval_data)
-        
-        return grouped
 
     def _save_results(self, final_results: Dict[str, Any]) -> None:
         """Save evaluation results to output files."""
