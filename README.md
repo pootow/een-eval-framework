@@ -180,7 +180,7 @@ workflow.add_vllm_model(
 
 ```python
 workflow = (EvalWorkflow.builder()
-            .inference_config(batch_size=8, max_parallel=4)
+            .inference_config(batch_size=8, max_workers=4)
             .build())
 ```
 

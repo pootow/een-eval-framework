@@ -377,6 +377,8 @@ class EvalWorkflow:
             sample_params=self._sample_params,
             prompt_template=self._eval_prompt_template,
             output_manager=self._output_manager,
+            batch_size=self._config.batch_size if self._config else 1,
+            max_workers=self._config.max_workers if self._config else 1,
             resume=self._resume
         )
         

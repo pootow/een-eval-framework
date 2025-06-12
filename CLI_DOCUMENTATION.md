@@ -73,7 +73,7 @@ This will only resume the inference mode.
 - `--mode {inference,evaluation,full}`: Evaluation mode (default: full)
 - `--output-dir, -o DIR`: Output directory (overrides config)
 - `--batch-size INT`: Inference batch size (overrides config)
-- `--max-parallel INT`: Maximum parallel processes (overrides config)
+- `--max-workers INT`: Maximum parallel processes (overrides config)
 
 #### Quick Run Options (without config file)
 

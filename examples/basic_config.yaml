@@ -53,7 +53,7 @@ metrics:
 
 inference:
   batch_size: 4
-  max_parallel: 2
+  max_workers: 2
   timeout: 30
 
 output:

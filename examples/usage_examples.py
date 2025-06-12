@@ -74,7 +74,7 @@ def example_advanced_usage():
                 .add_metric("pass_rate")
                 .add_custom_metric("weighted_score", weighted_score,
                                  config={"weights": [0.6, 0.4]})
-                .inference_config(batch_size=8, max_parallel=2)
+                .inference_config(batch_size=8, max_workers=2)
                 .output_directory("results/advanced_example")
                 .enable_resume()
                 .build())

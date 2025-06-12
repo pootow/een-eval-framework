@@ -151,7 +151,7 @@ def create_sample_config(output_path: str, config_type: str = "basic") -> None:
             ],
             "inference": {
                 "batch_size": 8,
-                "max_parallel": 4,
+                "max_workers": 4,
                 "timeout": 30
             },
             "output": {
@@ -236,8 +236,8 @@ def run_evaluation(args: argparse.Namespace) -> int:
             config.output_dir = args.output_dir
         if args.batch_size:
             config.batch_size = args.batch_size
-        if args.max_parallel:
-            config.max_workers = args.max_parallel
+        if args.max_workers:
+            config.max_workers = args.max_workers
           # Create workflow from config
         workflow = EvalWorkflow(config=config)
         
@@ -406,7 +406,7 @@ Examples:
     execution_parent.add_argument("--batch-size", 
                                  type=int,
                                  help="Batch size (overrides config)")
-    execution_parent.add_argument("--max-parallel", 
+    execution_parent.add_argument("--max-workers", 
                                  type=int,
                                  help="Maximum parallel processes (overrides config)")
     
@@ -450,7 +450,7 @@ Examples:
     eval_parser.add_argument("--batch-size", 
                             type=int,
                             help="Batch size (overrides config)")
-    eval_parser.add_argument("--max-parallel", 
+    eval_parser.add_argument("--max-workers", 
                             type=int,
                             help="Maximum parallel processes (overrides config)")
     
