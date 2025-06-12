@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional, Union
 from dataclasses import asdict
 import logging
 
-from een_eval.core.models import InferenceResult
+from ..core.models import InferenceResult
 
 
 class OutputManager:
@@ -26,9 +26,9 @@ class OutputManager:
         self.logger = logging.getLogger(__name__)
         
         # Initialize output files
-        self.inference_file = self.output_dir / "inference.jsonl"
+        self.inference_file = self.output_dir / "inference.json"
         self.responses_file = self.output_dir / "responses.jsonl"
-        self.evaluation_file = self.output_dir / "evaluation_results.json"
+        self.evaluation_file = self.output_dir / "evaluation_results.jsonl"
         self.status_file = self.output_dir / "status.json"
         self.metrics_file = self.output_dir / "metrics.json"
         self.config_file = self.output_dir / "config.json"
@@ -49,7 +49,7 @@ class OutputManager:
         try:
             # Append to inference file
             with open(self.inference_file, 'a', encoding='utf-8') as f:
-                json.dump(metadata, f, ensure_ascii=False, default=str)
+                json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
                 f.write('\n')
             self.logger.debug("Saved inference metadata")
         except Exception as e:
@@ -113,11 +113,13 @@ class OutputManager:
             self.logger.error(f"Failed to load responses: {e}")
             return []
     
-    def save_evaluation_results(self, results: Dict[str, Any]) -> None:
+    def save_evaluation_results(self, results: list) -> None:
         """Save evaluation results."""
         try:
             with open(self.evaluation_file, 'w', encoding='utf-8') as f:
-                json.dump(results, f, indent=2, ensure_ascii=False, default=str)
+                for result in results:
+                    json.dump(result, f, ensure_ascii=False, default=str)
+                    f.write('\n')
             self.logger.debug(f"Saved evaluation results to {self.evaluation_file}")
         except Exception as e:
             self.logger.error(f"Failed to save evaluation results: {e}")

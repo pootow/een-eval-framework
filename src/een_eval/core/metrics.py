@@ -14,7 +14,7 @@ import importlib.util
 from pathlib import Path
 from collections import defaultdict
 
-from een_eval.workflow.config import MetricConfig
+from ..workflow.config import MetricConfig
 
 
 @dataclass

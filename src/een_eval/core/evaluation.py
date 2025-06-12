@@ -14,7 +14,7 @@ import re
 import json
 from pathlib import Path
 
-from een_eval.workflow.config import EvaluationMethodConfig
+from ..workflow.config import EvaluationMethodConfig
 
 @dataclass
 class EvaluationLabelConfig:
