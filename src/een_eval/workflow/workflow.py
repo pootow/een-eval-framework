@@ -17,7 +17,7 @@ from ..core.models import Model, ModelConfig
 from ..core.evaluation import EvaluationMethod, BuiltInEvaluationMethod
 from ..core.metrics import Metric, BuiltInMetric
 from ..core.dataset import Dataset
-from ..workflow.config import Config, EvaluationMethodConfig, MetricConfig
+from ..workflow.config import Config, EvaluationMethodConfig, MetricConfig, DatasetConfig
 from ..workflow.inference import InferenceEngine
 from ..workflow.evaluation import EvaluationEngine
 from ..utils.io import OutputManager
@@ -307,10 +307,13 @@ class EvalWorkflow:
             else:
                 self._models.append(model)
 
-    def _set_dataset(self, dataset: Union[str, Dataset, Dict[str, Any]]) -> None:
+    def _set_dataset(self, dataset: Union[str, Dataset, Dict[str, Any], DatasetConfig]) -> None:
         """Set dataset for evaluation."""
         if isinstance(dataset, str):
             self._dataset = Dataset.from_file(dataset)
+        elif isinstance(dataset, DatasetConfig):
+            # Handle DatasetConfig objects
+            self._dataset = Dataset.from_config(dataset)
         elif isinstance(dataset, dict):
             # Handle dataset configuration from config files
             if "file_path" in dataset:

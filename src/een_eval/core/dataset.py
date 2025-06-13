@@ -7,10 +7,13 @@ for various formats used in model evaluation.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional, Iterator, Union
+from typing import Dict, List, Any, Optional, Iterator, Union, Callable
 import json
 import csv
+import importlib.util
 from pathlib import Path
+
+from ..utils.module_loader import load_function_from_file, load_function_from_module
 
 
 @dataclass
@@ -100,6 +103,74 @@ class Dataset:
                 items.append(DatasetItem(id=str(i), data={"value": item_data}))
         
         return cls(items)
+    
+    @classmethod
+    def from_function(
+        cls,
+        function: Callable,
+        **params
+    ) -> "Dataset":
+        """Create dataset from custom function."""
+        result = function(**params)
+        
+        if isinstance(result, cls):            return result
+        elif isinstance(result, list):
+            return cls.from_list(result)
+        elif isinstance(result, dict):
+            return cls.from_dict(result)
+        else:
+            raise ValueError(f"Custom dataset function must return Dataset, list, or dict, got {type(result)}")
+    
+    @classmethod
+    def from_file_function(
+        cls,
+        file_path: str, 
+        function_name: str,
+        **params
+    ) -> "Dataset":
+        """Create dataset from function in external file."""
+        if not function_name:
+            raise ValueError("function_name is required for custom dataset loading")
+        function = load_function_from_file(file_path, function_name)
+        return cls.from_function(function, **params)
+    
+    @classmethod
+    def from_config(cls, config) -> "Dataset":
+        """Create dataset from DatasetConfig object."""
+        # Import here to avoid circular imports
+        from ..workflow.config import DatasetConfig
+        
+        if not isinstance(config, DatasetConfig):
+            raise ValueError("Expected DatasetConfig object")
+        
+        if config.type == "built_in":
+            # Built-in dataset loading (from file paths)
+            if config.path:
+                return cls.from_file(config.path)
+            else:
+                raise ValueError("Built-in dataset type requires a path")
+        elif config.type == "custom":
+            if config.path:
+                # File-based custom dataset function
+                if not config.function_name:
+                    raise ValueError("function_name is required for custom dataset type")
+                return cls.from_file_function(config.path, config.function_name, **config.params)
+            elif config.module and config.function_name:
+                # Module-based custom dataset function
+                try:
+                    function = load_function_from_module(config.module, config.function_name)
+                    return cls.from_function(function, **config.params)
+                except Exception as e:
+                    raise ImportError(f"Could not load function {config.function_name} from module {config.module}: {e}")
+            else:
+                raise ValueError("Custom dataset type requires either path or module/function_name")
+        elif config.type == "file":
+            if config.path:
+                return cls.from_file(config.path)
+            else:
+                raise ValueError("File dataset type requires a path")
+        else:
+            raise ValueError(f"Unknown dataset type: {config.type}")
     
     @classmethod
     def _load_jsonl(cls, file_path: str, **kwargs) -> "Dataset":
@@ -317,7 +388,7 @@ class Dataset:
         # Field analysis
         field_counts = {}
         field_types = {}
-        
+
         for item in self.items:
             for key, value in item.data.items():
                 field_counts[key] = field_counts.get(key, 0) + 1

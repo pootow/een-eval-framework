@@ -16,6 +16,30 @@ from ..core.models import ModelConfig, ModelType
 
 
 @dataclass
+class DatasetConfig:
+    """Configuration for dataset loading."""
+    type: str = "built_in"  # "built_in", "custom", or "file"
+    path: Optional[str] = None  # Custom file containing dataset function
+    module: Optional[str] = None  # Module name for custom dataset function
+    function_name: Optional[str] = None  # Function name for custom dataset loading
+    params: Dict[str, Any] = field(default_factory=dict)  # Parameters for dataset function
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DatasetConfig":
+        if isinstance(data, str):
+            # Simple string format - assume it's a file path
+            return cls(type="file", path=data)
+        
+        return cls(
+            type=data.get("type", "built_in"),
+            path=data.get("path"),
+            module=data.get("module"),
+            function_name=data.get("function_name"),
+            params=data.get("params", {})
+        )
+
+
+@dataclass
 class EvaluationMethodConfig:
     """Configuration for evaluation method."""
     name: str
@@ -68,7 +92,7 @@ class Config:
     """Main configuration for evaluation workflow."""
     # Core components
     models: List[ModelConfig] = field(default_factory=list)
-    dataset: Optional[str] = None
+    dataset: Optional[DatasetConfig] = None  # Changed from str to DatasetConfig
     evaluation_methods: List[EvaluationMethodConfig] = field(default_factory=list)
     metrics: List[MetricConfig] = field(default_factory=list)
     
@@ -132,8 +156,9 @@ class Config:
                 else:
                     config.models.append(ModelConfig.from_dict(model_data))
         
-        # Load dataset
-        config.dataset = data.get("dataset")
+        # Load dataset configuration
+        if "dataset" in data:
+            config.dataset = DatasetConfig.from_dict(data["dataset"])
         
         # Load evaluation methods
         if "evaluation_methods" in data:
@@ -195,7 +220,6 @@ class Config:
             f"{prefix}TIMEOUT": "timeout",
             f"{prefix}MAX_RETRIES": "max_retries",
             f"{prefix}OUTPUT_DIR": "output_dir",
-            f"{prefix}DATASET": "dataset",
             f"{prefix}LOG_LEVEL": "log_level",
             f"{prefix}LOG_FILE": "log_file",
             f"{prefix}RESUME": "resume"
@@ -212,6 +236,11 @@ class Config:
                     value = value.lower() in ("true", "1", "yes", "on")
                 
                 setattr(config, config_attr, value)
+        
+        # Load dataset from env vars
+        if f"{prefix}DATASET" in os.environ:
+            dataset_path = os.environ[f"{prefix}DATASET"]
+            config.dataset = DatasetConfig(type="file", path=dataset_path)
         
         # Load sample parameters from env vars
         sample_param_prefix = f"{prefix}SAMPLE_"
@@ -286,6 +315,17 @@ class Config:
             
             if model.type == ModelType.OPENAI and not model.endpoint and not model.api_key:
                 errors.append(f"Model {i}: endpoint or api_key is required for OpenAI models")
+        
+        # Validate dataset
+        if self.dataset:
+            if self.dataset.type == "custom" and not (self.dataset.path or self.dataset.module):
+                errors.append("Dataset: file or module is required for custom dataset")
+            
+            if self.dataset.type == "custom" and not self.dataset.function_name:
+                errors.append("Dataset: function_name is required for custom dataset")
+            
+            if self.dataset.type == "file" and not self.dataset.path:
+                errors.append("Dataset: path is required for file dataset")
         
         # Validate evaluation methods
         for i, method in enumerate(self.evaluation_methods):

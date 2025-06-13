@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from ..workflow.config import EvaluationMethodConfig
+from ..utils.module_loader import load_function_from_file, load_function_from_module
 
 @dataclass
 class EvaluationLabelConfig:
@@ -131,7 +132,7 @@ class EvaluationMethod(ABC):
         **params
     ) -> "EvaluationMethod":
         """Create evaluation method from external file."""
-        function = _load_function_from_file(file_path, function_name or name)
+        function = load_function_from_file(file_path, function_name or name)
         return cls.from_function(name, function, **params)
     
     @classmethod
@@ -146,9 +147,7 @@ class EvaluationMethod(ABC):
             elif hasattr(config, 'module') and hasattr(config, 'function_name') and config.module and config.function_name:
                 # Module-based custom evaluation method  
                 try:
-                    import importlib
-                    module = importlib.import_module(config.module)
-                    function = getattr(module, config.function_name)
+                    function = load_function_from_module(config.module, config.function_name)
                     return cls.from_function(config.name, function, **config.params)
                 except (ImportError, AttributeError) as e:
                     raise ValueError(f"Could not load function {config.function_name} from module {config.module}: {e}")
@@ -704,19 +703,3 @@ class LengthCheckEvaluation(EvaluationMethod):
         }
 
 
-def _load_function_from_file(file_path: str, function_name: str) -> Callable:
-    """Load a function from a Python file."""
-    if not Path(file_path).exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    spec = importlib.util.spec_from_file_location("custom_eval", file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load module from {file_path}")
-    
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    
-    if not hasattr(module, function_name):
-        raise AttributeError(f"Function '{function_name}' not found in {file_path}")
-    
-    return getattr(module, function_name)
