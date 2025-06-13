@@ -46,6 +46,7 @@ class MetricConfig:
     module: Optional[str] = None
     function_name: Optional[str] = None
     facets: List[str] = field(default_factory=list)  # Added facets support
+    labels: Optional[Dict[str, List[str]]] = field(default_factory=dict)  # support include/exclude labels
     params: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
@@ -57,6 +58,7 @@ class MetricConfig:
             module=data.get("module"),
             function_name=data.get("function_name"),
             facets=data.get("facets", []),
+            labels=data.get("labels", {}),
             params=data.get("params", {})
         )
 

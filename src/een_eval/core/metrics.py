@@ -34,10 +34,11 @@ class MetricResult:
 
 class Metric(ABC):
     """Abstract base class for metrics."""
-    
-    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
+
+    def __init__(self, name: str, facets: Optional[List[str]] = None, labels: Optional[Dict[str, List[str]]] = None, **params):
         self.name = name
         self.facets = facets or []
+        self.labels = labels or {}
         self.params = params
     
     def calculate(
@@ -59,6 +60,22 @@ class Metric(ABC):
         """
         used_facets = facets or self.facets
         
+        # check if labels in include mode or exclude mode
+        if self.labels:
+            # if both raise error
+            if "include" in self.labels and "exclude" in self.labels:
+                raise ValueError("Cannot use both 'include' and 'exclude' labels in metric configuration.")
+            if "include" in self.labels:
+                # only include specified labels
+                include_labels = set(self.labels["include"])
+                evaluation_results = [r for r in evaluation_results if r.get("label") in include_labels]
+            elif "exclude" in self.labels:
+                # exclude specified labels
+                exclude_labels = set(self.labels["exclude"])
+                evaluation_results = [r for r in evaluation_results if r.get("label") not in exclude_labels]
+            else:
+                raise ValueError("Labels configuration must contain either 'include' or 'exclude' key.")
+
         # Always include label as an implicit facet for grouping
         # Group by facets and calculate for each group
         grouped = self._group_by_facets(evaluation_results, used_facets)
@@ -137,13 +154,11 @@ class Metric(ABC):
     @classmethod
     def from_config(cls, config: MetricConfig) -> "Metric":
         """Create metric from configuration object."""
-        if config.type == "built_in":
-            return BuiltInMetric.create(config.name, facets=getattr(config, 'facets', []), **config.params)
-        elif config.type == "custom":
+        if config.type == "custom":
             if config.path:
                 # File-based custom metric
                 return cls.from_file(config.name, config.path, config.function_name, 
-                                   facets=getattr(config, 'facets', []), **config.params)
+                                   facets=getattr(config, 'facets', []), labels=getattr(config, 'labels', {}), **config.params)
             elif hasattr(config, 'module') and hasattr(config, 'function_name') and config.module and config.function_name:
                 # Module-based custom metric
                 try:
@@ -151,13 +166,14 @@ class Metric(ABC):
                     module = importlib.import_module(config.module)
                     function = getattr(module, config.function_name)
                     return cls.from_function(config.name, function, 
-                                           facets=getattr(config, 'facets', []), **config.params)
+                                           facets=getattr(config, 'facets', []), labels=getattr(config, 'labels', {}), **config.params)
                 except (ImportError, AttributeError) as e:
                     raise ValueError(f"Could not load function {config.function_name} from module {config.module}: {e}")
             else:
                 raise ValueError("Custom metric requires either 'path' or 'module'+'function_name'")
         else:
-            raise ValueError(f"Unknown metric type: {config.type}")
+            return BuiltInMetric.create(config.name, config.type, facets=getattr(config, 'facets', []), labels=getattr(config, 'labels', {}), **config.params)
+
     def _group_by_facets(
         self, 
         evaluation_results: List[Dict[str, Any]], 
@@ -234,7 +250,7 @@ class BuiltInMetric(Metric):
     """Built-in metrics."""
     
     @classmethod
-    def create(cls, metric_name: str, facets: Optional[List[str]] = None, **params) -> Metric:
+    def create(cls, metric_name: str, metric_type: str, facets: Optional[List[str]] = None, **params) -> Metric:
         """Create built-in metric."""
         metric_map = {
             "pass_at_k": PassAtKMetric,
@@ -245,17 +261,17 @@ class BuiltInMetric(Metric):
             "count": CountMetric
         }
         
-        if metric_name not in metric_map:
-            raise ValueError(f"Unknown built-in metric: {metric_name}")
+        if metric_type not in metric_map:
+            raise ValueError(f"Unknown built-in metric: {metric_type}")
         
-        return metric_map[metric_name](facets=facets, **params)
+        return metric_map[metric_type](metric_name, facets=facets, **params)
 
 
 class PassAtKMetric(Metric):
     """Pass@K metric calculation."""
-    
-    def __init__(self, k: int = 1, num_samples: int = 16, aggregation: str = "mean", facets: Optional[List[str]] = None, **params):
-        super().__init__("pass_at_k", facets, **params)
+
+    def __init__(self, name: str, k: int = 1, num_samples: int = 16, aggregation: str = "mean", facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
         self.k = k
         self.num_samples = num_samples
         self.aggregation = aggregation
@@ -302,10 +318,10 @@ class PassAtKMetric(Metric):
 
 class MeanMetric(Metric):
     """Mean score metric."""
-    
-    def __init__(self, facets: Optional[List[str]] = None, **params):
-        super().__init__("mean", facets, **params)
-    
+
+    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
+
     def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
@@ -324,9 +340,9 @@ class MeanMetric(Metric):
 class MedianMetric(Metric):
     """Median score metric."""
 
-    def __init__(self, facets: Optional[List[str]] = None, **params):
-        super().__init__("median", facets, **params)
-    
+    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
+
     def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
@@ -344,9 +360,9 @@ class MedianMetric(Metric):
 
 class PercentileMetric(Metric):
     """Percentile score metric."""
-    
-    def __init__(self, percentile: float = 95.0, facets: Optional[List[str]] = None, **params):
-        super().__init__("percentile", facets, **params)
+
+    def __init__(self, name: str, percentile: float = 95.0, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
         self.percentile = percentile
     
     def _calculate_single(
@@ -377,10 +393,10 @@ class PercentileMetric(Metric):
 
 class PassRateMetric(Metric):
     """Pass rate metric."""
-    
-    def __init__(self, facets: Optional[List[str]] = None, **params):
-        super().__init__("pass_rate", facets, **params)
-    
+
+    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
+
     def _calculate_single(
         self, 
         evaluation_results: List[Dict[str, Any]],
@@ -400,9 +416,9 @@ class PassRateMetric(Metric):
 
 class CountMetric(Metric):
     """Count metric."""
-    
-    def __init__(self, facets: Optional[List[str]] = None, **params):
-        super().__init__("count", facets, **params)
+
+    def __init__(self, name: str, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
 
     def _calculate_single(
         self, 
