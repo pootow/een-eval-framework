@@ -7,6 +7,7 @@ and response collection with support for batching and resumption.
 
 import time
 import logging
+import threading
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import jinja2
@@ -76,11 +77,14 @@ class InferenceEngine:
         self.max_workers = max_workers
         self.resume = resume
         self.logger = logging.getLogger(__name__)
-        
+
         # State tracking
         self.completed_samples = 0
         self.total_samples = len(dataset) * len(models) * self.num_samples
         self.start_time: Optional[float] = None
+        
+        # Thread synchronization
+        self._lock = threading.Lock()
 
         # Resume tracking - load existing responses if resuming
         self.existing_responses: Dict[str, InferenceResult] = {}
@@ -234,21 +238,24 @@ class InferenceEngine:
     ) -> List[InferenceResult]:
         """Run inference sequentially."""
         results = []
-        
+
         for batch in batches:
             batch_results = self._process_batch(model, batch)
-            results.extend(batch_results)
             
-            # Update status and save intermediate results
-            self.completed_samples += len(batch_results)
-            status.processed_samples = self.completed_samples
-            
-            if self.output_manager:
-                # Only save new results (not existing ones)
-                new_results = [r for r in batch_results if r not in self.existing_responses.values()]
-                if new_results:
-                    self.output_manager.save_responses_batch(new_results)
-                self.output_manager.save_status(status)
+            # Thread-safe updates (defensive programming)
+            with self._lock:
+                results.extend(batch_results)
+                
+                # Update status and save intermediate results
+                self.completed_samples += len(batch_results)
+                status.processed_samples = self.completed_samples
+                
+                if self.output_manager:
+                    # Only save new results (not existing ones)
+                    new_results = [r for r in batch_results if r not in self.existing_responses.values()]
+                    if new_results:
+                        self.output_manager.save_responses_batch(new_results)
+                    self.output_manager.save_status(status)
         
         return results
 
@@ -267,28 +274,33 @@ class InferenceEngine:
                 executor.submit(self._process_batch, model, batch): batch
                 for batch in batches
             }
-            
+
             # Collect results as they complete
             for future in as_completed(future_to_batch):
                 batch = future_to_batch[future]
                 try:
                     batch_results = future.result()
-                    results.extend(batch_results)
                     
-                    # Update status and save intermediate results
-                    self.completed_samples += len(batch_results)
-                    status.processed_samples = self.completed_samples
-                    
-                    if self.output_manager:
-                        # Only save new results (not existing ones)
-                        new_results = [r for r in batch_results if r not in self.existing_responses.values()]
-                        if new_results:
-                            self.output_manager.save_responses_batch(new_results)
-                        self.output_manager.save_status(status)
+                    # Thread-safe updates using lock
+                    with self._lock:
+                        results.extend(batch_results)
+                        
+                        # Update status and save intermediate results
+                        self.completed_samples += len(batch_results)
+                        status.processed_samples = self.completed_samples
+                        
+                        if self.output_manager:
+                            # Only save new results (not existing ones)
+                            new_results = [r for r in batch_results if r not in self.existing_responses.values()]
+                            if new_results:
+                                self.output_manager.save_responses_batch(new_results)
+                            self.output_manager.save_status(status)
                         
                 except Exception as e:
                     self.logger.error(f"Batch processing failed: {e}")
-                    status.errors.append(f"Batch processing: {e}")
+                    # Thread-safe error logging
+                    with self._lock:
+                        status.errors.append(f"Batch processing: {e}")
         
         return results
 
