@@ -293,6 +293,8 @@ class EvalWorkflow:
         if hasattr(self._config, 'mode'):
             self._mode = self._config.mode
         # REVIEW: find if any other parameters forget to apply from config
+
+        self._config.setup_environment()
     
     def _set_models(self, models: List[Union[str, Model, ModelConfig]]) -> None:
         """Set models for evaluation."""

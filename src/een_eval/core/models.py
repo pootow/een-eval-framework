@@ -13,7 +13,9 @@ import openai
 import requests
 import time
 import random
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ModelType(Enum):
     """Supported model types."""
@@ -60,6 +62,16 @@ class ModelConfig:
             timeout=data.get("timeout", 300),
             max_retries=data.get("max_retries", 3),
             extra_params=data.get("extra_params", {})
+        )
+    
+    @classmethod
+    def from_name(cls, name: str) -> "ModelConfig":
+        """Create ModelConfig from model name (defaults to local OpenAI API compatible service at localhost:1234)."""
+        return cls(
+            name=name, 
+            type=ModelType.OPENAI,
+            api_key="dummy_api_key_for_local_model",
+            endpoint="http://localhost:1234/v1"
         )
 
 
@@ -159,8 +171,8 @@ class OpenAIModel(ModelInterface):
             **kwargs
         }
         
-        # Remove None values
-        params = {k: v for k, v in params.items() if v is not None}
+        # Remove None values and unsupported params
+        params = {k: v for k, v in params.items() if v is not None and k not in ['num_samples']}
         
         try:
             response = self.client.chat.completions.create(**params)
@@ -188,6 +200,7 @@ class OpenAIModel(ModelInterface):
                 }
             )
         except Exception as e:
+            logger.error(f"OpenAI API call failed: {e}")
             return SimpleInferenceResult(
                 response="",
                 prompt=prompt,
@@ -274,6 +287,7 @@ class VLLMModel(ModelInterface):
                 }
             )
         except Exception as e:
+            logger.error(f"VLLM API call failed: {e}")
             return SimpleInferenceResult(
                 response="",
                 prompt=prompt,
@@ -404,6 +418,7 @@ class MockModel(ModelInterface):
                     "APIError: Mock API rate limit exceeded"
                 ]
                 error_msg = random.choice(failure_types)
+                logger.error(f"Mock model failure: {error_msg}")
                 return SimpleInferenceResult(
                     response="",
                     prompt=prompt,
@@ -473,12 +488,7 @@ class Model:
     @classmethod
     def from_name(cls, name: str) -> "Model":
         """Create model from name (defaults to local OpenAI compatible model at localhost:1234)."""
-        config = ModelConfig(
-            name=name, 
-            type=ModelType.OPENAI,
-            api_key="dummy_api_key_for_local_model",
-            endpoint="http://localhost:1234/v1"
-        )
+        config = ModelConfig.from_name(name)
         return cls.from_config(config)
     
     @classmethod

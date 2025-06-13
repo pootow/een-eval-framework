@@ -224,6 +224,7 @@ class InferenceEngine:
     
     def _create_batches(self) -> List[List[DatasetItem]]:
         """Create batches from dataset items."""
+        # REVIEW: this batching is wrong, it batches items, not samples
         batches = []
         for i in range(0, len(self.dataset), self.batch_size):
             batch = self.dataset[i:i + self.batch_size]
@@ -231,10 +232,10 @@ class InferenceEngine:
         return batches
 
     def _run_sequential_inference(
-        self, 
-        model: Model, 
-        batches: List[List[DatasetItem]], 
-        status    
+        self,
+        model: Model,
+        batches: List[List[DatasetItem]],
+        status
     ) -> List[InferenceResult]:
         """Run inference sequentially."""
         results = []

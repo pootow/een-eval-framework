@@ -126,12 +126,7 @@ class Config:
             config.models = []
             for model_data in data["models"]:
                 if isinstance(model_data, str):
-                    # Simple model name - default to local model at localhost:1234
-                    config.models.append(ModelConfig(
-                        name=model_data, 
-                        type=ModelType.OPENAI,
-                        endpoint="http://localhost:1234/v1"
-                    ))
+                    config.models.append(ModelConfig.from_name(model_data))
                 else:
                     config.models.append(ModelConfig.from_dict(model_data))
         
@@ -175,8 +170,12 @@ class Config:
         config.save_intermediate = data.get("save_intermediate", True)
         config.resume = data.get("resume", False)
         config.resume_from = data.get("resume_from")
-        config.log_level = data.get("log_level", "INFO")
-        config.log_file = data.get("log_file")
+
+        if "logging" in data:
+            logging_data = data["logging"]
+            config.log_level = logging_data.get("level", "INFO")
+            config.log_file = logging_data.get("file")
+
         config.env_vars = data.get("env_vars", {})
         
         return config
