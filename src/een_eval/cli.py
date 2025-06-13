@@ -445,8 +445,7 @@ Examples:
                                        parents=[config_parent],
                                        help="Run evaluation only (equivalent to run --mode evaluation)")
     eval_parser.add_argument("--output-dir", "-o", 
-                            required=True,
-                            help="Output directory containing predictions (required)")
+                            help="Output directory containing predictions (required if not in config)")
     eval_parser.add_argument("--batch-size", 
                             type=int,
                             help="Batch size (overrides config)")
