@@ -47,7 +47,7 @@ metrics:
       - prompt_template
     params:
       k: 1
-      num_samples: 16
+      num_trials: 16
       aggregation: "mean"
 
   - name: "pass@16"
@@ -56,7 +56,7 @@ metrics:
       - metadata.model_id
     params:
       k: 16
-      num_samples: 16
+      num_trials: 16
 
   - name: "avg_score"
     type: "mean"

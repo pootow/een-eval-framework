@@ -16,6 +16,8 @@ from collections import defaultdict
 
 from ..workflow.config import MetricConfig
 
+import logging
+logger = logging.getLogger(__name__)
 
 @dataclass
 class MetricResult:
@@ -270,10 +272,10 @@ class BuiltInMetric(Metric):
 class PassAtKMetric(Metric):
     """Pass@K metric calculation."""
 
-    def __init__(self, name: str, k: int = 1, num_samples: int = 16, aggregation: str = "mean", facets: Optional[List[str]] = None, **params):
+    def __init__(self, name: str, k: int = 1, num_trials: int = 1, aggregation: str = "mean", facets: Optional[List[str]] = None, **params):
         super().__init__(name, facets, **params)
         self.k = k
-        self.num_samples = num_samples
+        self.num_trials = num_trials
         self.aggregation = aggregation
     
     def _calculate_single(
@@ -286,20 +288,40 @@ class PassAtKMetric(Metric):
         items_dict = self._group_by_item_id(evaluation_results)
         
         pass_at_k_values = []
-        total_samples = 0
-        
-        for item_id, item_results in items_dict.items():
-            # Check if at least k samples passed for this item
-            passed_samples = [r for r in item_results if r.get("passed", False)]
-            item_passes_at_k = len(passed_samples) >= self.k
-            pass_at_k_values.append(1.0 if item_passes_at_k else 0.0)
-            total_samples += len(item_results)
-        
-        if self.aggregation == "mean":
-            pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
+        total_samples = sum(len(results) for results in items_dict.values())
+
+        min_samples_per_item = min(len(results) for results in items_dict.values())
+        min_samples_needed = self.k * self.num_trials
+        if min_samples_per_item < min_samples_needed:
+            raise ValueError(f"Not enough samples for pass@k calculation. Need at least {min_samples_needed} samples per item, but got {min_samples_per_item}.")
+
+        for trial_n in range(self.num_trials):
+            # get results for this trial
+            trial_n_samples = {
+                item_id: results[
+                            trial_n*self.k : (trial_n+1)*self.k
+                        ]
+                for item_id, results in items_dict.items()
+            }
+
+            per_item_pass = [1.0 if any(r.get("passed", False) for r in item_results) else 0.0
+                                            for item_results in trial_n_samples.values()]
+
+            trial_n_pass_at_k = statistics.mean(per_item_pass) if per_item_pass else 0.0
+
+            pass_at_k_values.append(trial_n_pass_at_k)
+
+        if self.num_trials == 1:
+            pass_at_k = pass_at_k_values[0] if pass_at_k_values else 0.0
+        elif self.aggregation == "median":
+            pass_at_k = statistics.median(pass_at_k_values) if pass_at_k_values else 0.0
+        elif self.aggregation == "max":
+            pass_at_k = max(pass_at_k_values) if pass_at_k_values else 0.0
+        elif self.aggregation == "min":
+            pass_at_k = min(pass_at_k_values) if pass_at_k_values else 0.0
         else:
-            pass_at_k = sum(pass_at_k_values) / len(pass_at_k_values) if pass_at_k_values else 0.0
-        
+            pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
+
         return {
             f"pass_at_{self.k}": pass_at_k,
             "average_sample_count": total_samples / len(items_dict) if items_dict else 0,
