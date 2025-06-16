@@ -324,9 +324,9 @@ class InferenceEngine:
                 try:
                     # Process prompt
                     prompt = self.prompt_processor.process_prompt(item)
-                    
+
                     # Generate response
-                    simple_result = model.generate(prompt, **self.sample_params)
+                    simple_result = model.generate(prompt, global_sample_params=self.sample_params)
                     
                     # Create full InferenceResult
                     if simple_result.error:

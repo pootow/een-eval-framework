@@ -226,6 +226,87 @@ class DockerManager:
             self.logger.error(f"Failed to get container logs: {e.stderr}")
             return ""
     
+    def start_llamacpp_container(
+        self,
+        model_path: str,
+        model_name: str,
+        image: str = "ghcr.io/ggml-org/llama.cpp:server-cuda",
+        host_port: int = 1234,
+        container_port: int = 8000,
+        host: str = "0.0.0.0",
+        context_size: int = 8000,
+        n_gpu_layers: int = 99,
+        no_mmap: bool = True,
+        models_volume: str = "/models",
+        **kwargs
+    ) -> str:
+        """
+        Start llama.cpp container.
+        
+        Args:
+            model_path: Path to the model file (relative to models volume)
+            model_name: Name of the model
+            image: Docker image to use
+            host_port: Host port to bind to
+            container_port: Container port
+            host: Host to bind to
+            context_size: Context size (-c parameter)
+            n_gpu_layers: Number of GPU layers (--n-gpu-layers)
+            no_mmap: Whether to disable memory mapping (--no-mmap)
+            models_volume: Volume mount for models directory
+        
+        Returns:
+            Container ID
+        """
+        # Build Docker command
+        cmd = [
+            "docker", "run", "-d", "--rm",
+            "--gpus", "all",
+            "--ipc=host",
+            "-p", f"{host_port}:{container_port}",
+            "-v", f"{models_volume}:/models",
+            image,
+            "-m", f"/models/{model_path}",
+            "--port", str(container_port),
+            "--host", host,
+            "-c", str(context_size),
+            "--n-gpu-layers", str(n_gpu_layers)
+        ]
+        
+        # Add optional parameters
+        if no_mmap:
+            cmd.append("--no-mmap")
+        
+        # Add any additional parameters
+        for key, value in kwargs.items():
+            if isinstance(value, bool):
+                if value:
+                    cmd.append(f"--{key.replace('_', '-')}")
+            else:
+                cmd.extend([f"--{key.replace('_', '-')}", str(value)])
+        
+        try:
+            self.logger.info(f"Starting llama.cpp container for model: {model_name}")
+            self.logger.debug(f"Docker command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            container_id = result.stdout.strip()
+            self.active_containers[container_id] = model_name
+            
+            self.logger.info(f"Started container {container_id} for model {model_name}")
+            return container_id
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to start llama.cpp container: {e.stderr}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
     def __enter__(self):
         """Context manager entry."""
         return self

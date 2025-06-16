@@ -21,7 +21,7 @@ class ModelType(Enum):
     """Supported model types."""
     OPENAI = "openai"
     VLLM = "vllm"
-    HUGGINGFACE = "huggingface"
+    LLAMA_CPP = "llama.cpp"
     MOCK = "mock"
 
 
@@ -30,38 +30,37 @@ class ModelConfig:
     """Configuration for a model."""
     name: str
     type: ModelType
+    
+    # Model-specific parameters (not Docker-related)
+    model_path: Optional[str] = None
     endpoint: Optional[str] = None
     api_key: Optional[str] = None
-    model_path: Optional[str] = None
-    docker_image: Optional[str] = "vllm/vllm-openai:latest"
-    docker_params: Dict[str, Any] = field(default_factory=dict)
-    max_tokens: int = -1
-    temperature: float = 0.7
-    top_p: float = 1.0
-    top_k: int = -1
+    
+    # Docker configuration (only for local models)
+    docker_config: Optional[Dict[str, Any]] = None
+    
+    # Inference parameters
+    inference_params: Optional[Dict[str, Any]] = None
+    
+    # Connection parameters
     timeout: int = 300
     max_retries: int = 3
-    extra_params: Dict[str, Any] = field(default_factory=dict)
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
         """Create ModelConfig from dictionary."""
         model_type = ModelType(data.get("type", "openai"))
+        
         return cls(
             name=data["name"],
             type=model_type,
+            model_path=data.get("model_path"),
             endpoint=data.get("endpoint"),
             api_key=data.get("api_key"),
-            model_path=data.get("model_path"),
-            docker_image=data.get("docker_image", "vllm/vllm-openai:latest"),
-            docker_params=data.get("docker_params", {}),
-            max_tokens=data.get("max_tokens", -1),
-            temperature=data.get("temperature", 0.7),
-            top_p=data.get("top_p", 1.0),
-            top_k=data.get("top_k", -1),
+            docker_config=data.get("docker", {}),
+            inference_params=data.get("inference", {}),
             timeout=data.get("timeout", 300),
-            max_retries=data.get("max_retries", 3),
-            extra_params=data.get("extra_params", {})
+            max_retries=data.get("max_retries", 3)
         )
     
     @classmethod
@@ -73,6 +72,33 @@ class ModelConfig:
             api_key="dummy_api_key_for_local_model",
             endpoint="http://localhost:1234/v1"
         )
+
+    def merge_inference_params(self, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Merge global sample_params, model inference_params, and kwargs.
+        
+        Priority: kwargs > model.inference_params > global_sample_params
+        
+        Args:
+            global_sample_params: Global sampling parameters from config
+            **kwargs: Call-specific overrides
+            
+        Returns:
+            Merged parameters dictionary
+        """
+        result = {}
+        
+        # Start with global parameters (lowest priority)
+        if global_sample_params:
+            result.update(global_sample_params)
+        
+        # Override with model-specific parameters
+        if self.inference_params:
+            result.update(self.inference_params)
+        
+        # Override with call-specific parameters (highest priority)
+        result.update(kwargs)
+        
+        return result
 
 
 @dataclass
@@ -117,17 +143,24 @@ class InferenceResult:
 
 class ModelInterface(ABC):
     """Abstract interface for model inference."""
-    
+
     def __init__(self, config: ModelConfig):
         self.config = config
-
+    
     @abstractmethod
     def generate(
         self, 
-        prompt: str, 
+        prompt: str,
+        global_sample_params: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> SimpleInferenceResult:
-        """Generate response for a prompt."""
+        """Generate response for a prompt.
+        
+        Args:
+            prompt: The input prompt
+            global_sample_params: Global sampling parameters from config
+            **kwargs: Override parameters for this specific generation
+        """
         pass
     
     @abstractmethod
@@ -156,23 +189,31 @@ class OpenAIModel(ModelInterface):
             base_url=config.endpoint
         )
 
-    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
+    def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate response using OpenAI API."""
         start_time = time.time()
         
-        # Merge config and override parameters
+        # Merge parameters using the config method
+        merged_params = self.config.merge_inference_params(global_sample_params, **kwargs)
+
+        # Build API parameters
         params = {
             "model": self.config.name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "top_p": kwargs.get("top_p", self.config.top_p),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens) if self.config.max_tokens > 0 else None,
-            **self.config.extra_params,
-            **kwargs
+            "temperature": merged_params.get("temperature", 0.7),
+            "top_p": merged_params.get("top_p", 1.0),
+            "max_tokens": merged_params.get("max_tokens", -1),
         }
         
-        # Remove None values and unsupported params
-        params = {k: v for k, v in params.items() if v is not None and k not in ['num_samples']}
+        # Add any additional parameters from merged_params
+        for key, value in merged_params.items():
+            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+                params[key] = value
+        
+        # Remove None values and handle max_tokens
+        if params.get("max_tokens", -1) <= 0:
+            params.pop("max_tokens", None)
+        params = {k: v for k, v in params.items() if v is not None}
         
         try:
             response = self.client.chat.completions.create(**params)
@@ -234,7 +275,7 @@ class VLLMModel(ModelInterface):
         self.docker_container_id: Optional[str] = None
         self.client: Optional[openai.OpenAI] = None
 
-    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
+    def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate response using VLLM API."""
         if not self.client:
             return SimpleInferenceResult(
@@ -246,19 +287,27 @@ class VLLMModel(ModelInterface):
             )
         
         start_time = time.time()
+
+        # Merge parameters using the config method
+        merged_params = self.config.merge_inference_params(global_sample_params, **kwargs)
         
-        # Merge config and override parameters
+        # Build API parameters
         params = {
             "model": self.config.name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "top_p": kwargs.get("top_p", self.config.top_p),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens) if self.config.max_tokens > 0 else None,
-            **self.config.extra_params,
-            **kwargs
+            "temperature": merged_params.get("temperature", 0.7),
+            "top_p": merged_params.get("top_p", 1.0),
+            "max_tokens": merged_params.get("max_tokens", -1),
         }
         
-        # Remove None values
+        # Add any additional parameters from merged_params
+        for key, value in merged_params.items():
+            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+                params[key] = value
+        
+        # Remove None values and handle max_tokens
+        if params.get("max_tokens", -1) <= 0:
+            params.pop("max_tokens", None)
         params = {k: v for k, v in params.items() if v is not None}
         
         try:
@@ -325,19 +374,22 @@ class VLLMModel(ModelInterface):
             "enable_reasoning": True,
             "reasoning_parser": "deepseek_r1"
         }
-        
-        docker_params = {**default_params, **self.config.docker_params}
 
+        docker_params = {**default_params}
+        if self.config.docker_config:
+            docker_params.update(self.config.docker_config)
+        
         # Validate required parameters
         if not self.config.model_path:
             raise ValueError("model_path is required for VLLM models")
-        if not self.config.docker_image:
-            raise ValueError("docker_image is required for VLLM models")
+        
+        # Get docker image with default
+        docker_image = docker_params.get("image", "vllm/vllm-openai:latest")
         
         self.docker_container_id = docker_manager.start_vllm_container(
             model_path=self.config.model_path,
             model_name=self.config.name,
-            image=self.config.docker_image,
+            image=docker_image,
             host_port=self._extract_port_from_endpoint(),
             **docker_params
         )
@@ -383,15 +435,190 @@ class VLLMModel(ModelInterface):
         raise RuntimeError(f"VLLM server failed to start within {max_wait} seconds")
 
 
+class LlamaCppModel(ModelInterface):
+    """Llama.cpp model implementation (via OpenAI-compatible API)."""
+    
+    def __init__(self, config: ModelConfig):
+        super().__init__(config)
+        self.docker_container_id: Optional[str] = None
+        self.client: Optional[openai.OpenAI] = None
+
+    def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
+        """Generate response using llama.cpp API."""
+        if not self.client:
+            return SimpleInferenceResult(
+                response="",
+                prompt=prompt,
+                inference_time=0.0,
+                model_name=self.config.name,
+                error="Llama.cpp model not started. Call startup() first."
+            )
+        
+        start_time = time.time()
+        
+        # Merge parameters using the config method
+        merged_params = self.config.merge_inference_params(global_sample_params, **kwargs)
+        
+        # Build API parameters
+        params = {
+            "model": self.config.name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": merged_params.get("temperature", 0.7),
+            "top_p": merged_params.get("top_p", 1.0),
+            "max_tokens": merged_params.get("max_tokens", -1),
+        }
+        
+        # Add any additional parameters from merged_params
+        for key, value in merged_params.items():
+            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+                params[key] = value
+        
+        # Remove None values and handle max_tokens
+        if params.get("max_tokens", -1) <= 0:
+            params.pop("max_tokens", None)
+        params = {k: v for k, v in params.items() if v is not None}
+        
+        try:
+            response = self.client.chat.completions.create(**params)
+            end_time = time.time()
+            
+            inference_time = end_time - start_time
+            content = response.choices[0].message.content
+            
+            # Calculate tokens per second if usage info is available
+            total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
+            tokens_per_second = total_tokens / inference_time if total_tokens and inference_time > 0 else 0
+            
+            return SimpleInferenceResult(
+                response=content,
+                prompt=prompt,
+                inference_time=inference_time,
+                tokens_per_second=tokens_per_second,
+                model_name=self.config.name,
+                total_tokens=total_tokens,
+                prompt_tokens=getattr(response.usage, 'prompt_tokens', None) if response.usage else None,
+                completion_tokens=getattr(response.usage, 'completion_tokens', None) if response.usage else None,
+                metadata={
+                    "finish_reason": response.choices[0].finish_reason,
+                    "response_id": response.id
+                }
+            )
+        except Exception as e:
+            logger.error(f"Llama.cpp API call failed: {e}")
+            return SimpleInferenceResult(
+                response="",
+                prompt=prompt,
+                inference_time=time.time() - start_time,
+                model_name=self.config.name,
+                error=f"Llama.cpp API call failed: {e}"
+            )
+    
+    def is_available(self) -> bool:
+        """Check if llama.cpp server is available."""
+        if not self.config.endpoint:
+            return False
+        
+        try:
+            # Try both v1/models (OpenAI compatible) and /v1/models endpoints
+            response = requests.get(f"{self.config.endpoint}/v1/models", timeout=5)
+            if response.status_code == 200:
+                return True
+            # Some llama.cpp servers might use different endpoints
+            response = requests.get(f"{self.config.endpoint}/models", timeout=5)
+            return response.status_code == 200
+        except:
+            return False
+    
+    def startup(self) -> None:
+        """Start llama.cpp server in Docker container."""
+        from ..utils.docker import DockerManager
+        
+        if self.is_available():
+            self.client = openai.OpenAI(base_url=self.config.endpoint)
+            return
+        
+        # Check that models_volume is provided in docker config
+        if not self.config.docker_config or not self.config.docker_config.get("models_volume"):
+            raise ValueError("models_volume is required in docker config for llama.cpp models")
+
+        docker_manager = DockerManager()
+        
+        # Default Docker parameters for llama.cpp
+        default_params = {
+            "context_size": 8000,
+            "n_gpu_layers": 99,
+            "no_mmap": True,
+        }
+        
+        docker_params = {**default_params}
+        if self.config.docker_config:
+            docker_params.update(self.config.docker_config)
+
+        # Validate required parameters
+        if not self.config.model_path:
+            raise ValueError("model_path is required for llama.cpp models")
+        
+        # Get Docker image with default
+        docker_image = docker_params.get("image", "ghcr.io/ggml-org/llama.cpp:server-cuda")
+        
+        self.docker_container_id = docker_manager.start_llamacpp_container(
+            model_path=self.config.model_path,
+            model_name=self.config.name,
+            image=docker_image,
+            host_port=self._extract_port_from_endpoint(),
+            **docker_params
+        )
+        
+        # Wait for server to be ready
+        self._wait_for_server()
+        
+        # Setup client
+        self.client = openai.OpenAI(base_url=self.config.endpoint)
+    
+    def shutdown(self) -> None:
+        """Shutdown llama.cpp Docker container."""
+        if self.docker_container_id:
+            from ..utils.docker import DockerManager
+            docker_manager = DockerManager()
+            docker_manager.stop_container(self.docker_container_id)
+            self.docker_container_id = None
+        
+        self.client = None
+    
+    def _extract_port_from_endpoint(self) -> int:
+        """Extract port from endpoint URL."""
+        if not self.config.endpoint:
+            return 1234  # Default port for llama.cpp
+        
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(self.config.endpoint)
+            return parsed.port or 1234
+        except:
+            return 1234
+    
+    def _wait_for_server(self, max_wait: int = 300) -> None:
+        """Wait for llama.cpp server to be ready."""
+        import time
+
+        start_time = time.time()
+        while time.time() - start_time < max_wait:
+            if self.is_available():
+                return
+            time.sleep(5)
+        
+        raise RuntimeError(f"Llama.cpp server failed to start within {max_wait} seconds")
+
+
 class MockModel(ModelInterface):
     """Mock model implementation for testing purposes."""
 
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self.call_count = 0
-        # Use mock_responses from config if available, otherwise use defaults
-        if hasattr(config, 'extra_params') and config.extra_params and 'mock_responses' in config.extra_params:
-            self.responses = config.extra_params['mock_responses']
+        # Use mock_responses from inference_params if available, otherwise use defaults
+        if config.inference_params and 'mock_responses' in config.inference_params:
+            self.responses = config.inference_params['mock_responses']
         else:
             self.responses = [
                 "This is a mock response for testing purposes.",
@@ -401,13 +628,13 @@ class MockModel(ModelInterface):
                 "The framework supports various model types including mocks."
             ]
 
-    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
+    def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate mock response."""
         start_time = time.time()
         
         # Check for failure_rate configuration to randomly throw exceptions
-        if hasattr(self.config, 'extra_params') and self.config.extra_params:
-            failure_rate = self.config.extra_params.get('failure_rate', 0.0)
+        if self.config.inference_params:
+            failure_rate = self.config.inference_params.get('failure_rate', 0.0)
             if random.random() < failure_rate:
                 # Simulate different types of failures that might occur
                 failure_types = [
@@ -470,7 +697,7 @@ class Model:
     def __init__(self, interface: ModelInterface):
         self.interface = interface
         self.config = interface.config
-
+    
     @classmethod
     def from_config(cls, config: ModelConfig) -> "Model":
         """Create model from configuration."""
@@ -478,6 +705,8 @@ class Model:
             interface = OpenAIModel(config)
         elif config.type == ModelType.VLLM:
             interface = VLLMModel(config)
+        elif config.type == ModelType.LLAMA_CPP:
+            interface = LlamaCppModel(config)
         elif config.type == ModelType.MOCK:
             interface = MockModel(config)
         else:
@@ -497,9 +726,9 @@ class Model:
         config = ModelConfig.from_dict(data)
         return cls.from_config(config)
 
-    def generate(self, prompt: str, **kwargs) -> SimpleInferenceResult:
+    def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate response for a prompt."""
-        return self.interface.generate(prompt, **kwargs)
+        return self.interface.generate(prompt, global_sample_params, **kwargs)
     
     def is_available(self) -> bool:
         """Check if the model is available."""
