@@ -188,9 +188,11 @@ class Config:
         # Handle prompt template - support both inline and file-based templates
         config.eval_prompt_template = cls._load_prompt_template(data)
         
-        config.mode = data.get("mode", "inference")
-        config.batch_size = data.get("batch_size", 1)
-        config.max_workers = data.get("max_workers", 4)
+        workflow_config = data.get("workflow", {})
+        config.mode = workflow_config.get("mode", "inference")
+        config.batch_size = workflow_config.get("batch_size", 1)
+        config.max_workers = workflow_config.get("max_workers", 4)
+
         config.timeout = data.get("timeout", 300)
         config.max_retries = data.get("max_retries", 3)
         config.output_dir = data.get("output_dir")

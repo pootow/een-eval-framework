@@ -352,14 +352,26 @@ class VLLMModel(ModelInterface):
                 model_name=self.config.name,
                 error=f"VLLM API call failed: {e}"
             )
-    
+
     def is_available(self) -> bool:
-        """Check if VLLM server is available."""
+        """Check if VLLM server is available by testing completion API."""
         if not self.config.endpoint:
             return False
         
         try:
-            response = requests.get(f"{self.config.endpoint}/v1/models", timeout=5)
+            # Test with a simple completion request to ensure the API is actually working
+            import requests
+            test_payload = {
+                "model": self.config.name,
+                "messages": [{"role": "user", "content": "/nothink\necho this word, and do not output anything else: model-ready."}],
+                "max_tokens": 20,
+                "temperature": 0.0
+            }
+            response = requests.post(
+                f"{self.config.endpoint}/chat/completions",
+                json=test_payload,
+                timeout=10
+            )
             return response.status_code == 200
         except:
             return False
@@ -522,17 +534,24 @@ class LlamaCppModel(ModelInterface):
             )
     
     def is_available(self) -> bool:
-        """Check if llama.cpp server is available."""
+        """Check if llama.cpp server is available by testing completion API."""
         if not self.config.endpoint:
             return False
         
         try:
-            # Try both v1/models (OpenAI compatible) and /v1/models endpoints
-            response = requests.get(f"{self.config.endpoint}/v1/models", timeout=5)
-            if response.status_code == 200:
-                return True
-            # Some llama.cpp servers might use different endpoints
-            response = requests.get(f"{self.config.endpoint}/models", timeout=5)
+            # Test with a simple completion request to ensure the API is actually working
+            import requests
+            test_payload = {
+                "model": self.config.name,
+                "messages": [{"role": "user", "content": "/nothink\necho this word, and do not output anything else: model-ready."}],
+                "max_tokens": 20,
+                "temperature": 0.0
+            }
+            response = requests.post(
+                f"{self.config.endpoint}/chat/completions",
+                json=test_payload,
+                timeout=10
+            )
             return response.status_code == 200
         except:
             return False
