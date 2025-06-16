@@ -50,12 +50,20 @@ class ModelConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
         """Create ModelConfig from dictionary."""
         model_type = ModelType(data.get("type", "openai"))
+
+        # construct a endpoint if not provided
+        endpoint = data.get("endpoint")
+        if not endpoint:
+            port = None
+            if data.get("docker") and data["docker"].get("host_port"):
+                port = data["docker"]["host_port"]
+            endpoint = f"http://localhost:{port if port else 1234}/v1"
         
         return cls(
             name=data["name"],
             type=model_type,
             model_path=data.get("model_path"),
-            endpoint=data.get("endpoint"),
+            endpoint=endpoint,
             api_key=data.get("api_key"),
             docker_config=data.get("docker", {}),
             inference_params=data.get("inference", {}),
@@ -361,7 +369,7 @@ class VLLMModel(ModelInterface):
         from ..utils.docker import DockerManager
         
         if self.is_available():
-            self.client = openai.OpenAI(base_url=self.config.endpoint)
+            self.client = openai.OpenAI(base_url=self.config.endpoint, api_key="DUMMY_API_KEY")
             return
         
         docker_manager = DockerManager()
@@ -398,7 +406,7 @@ class VLLMModel(ModelInterface):
         self._wait_for_server()
         
         # Setup client
-        self.client = openai.OpenAI(base_url=self.config.endpoint)
+        self.client = openai.OpenAI(base_url=self.config.endpoint, api_key="DUMMY_API_KEY")
     
     def shutdown(self) -> None:
         """Shutdown VLLM Docker container."""
@@ -534,7 +542,7 @@ class LlamaCppModel(ModelInterface):
         from ..utils.docker import DockerManager
         
         if self.is_available():
-            self.client = openai.OpenAI(base_url=self.config.endpoint)
+            self.client = openai.OpenAI(base_url=self.config.endpoint, api_key="DUMMY_API_KEY")
             return
         
         # Check that models_volume is provided in docker config
@@ -560,20 +568,22 @@ class LlamaCppModel(ModelInterface):
         
         # Get Docker image with default
         docker_image = docker_params.get("image", "ghcr.io/ggml-org/llama.cpp:server-cuda")
+
+        if "host_port" not in docker_params:
+            docker_params["host_port"] = self._extract_port_from_endpoint()
         
         self.docker_container_id = docker_manager.start_llamacpp_container(
             model_path=self.config.model_path,
             model_name=self.config.name,
             image=docker_image,
-            host_port=self._extract_port_from_endpoint(),
             **docker_params
         )
         
         # Wait for server to be ready
-        self._wait_for_server()
+        self._wait_for_server(**{key: v for key, v in docker_params.items() if key in ['max_wait']})
         
         # Setup client
-        self.client = openai.OpenAI(base_url=self.config.endpoint)
+        self.client = openai.OpenAI(base_url=self.config.endpoint, api_key="DUMMY_API_KEY")
     
     def shutdown(self) -> None:
         """Shutdown llama.cpp Docker container."""

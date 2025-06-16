@@ -80,14 +80,12 @@ class ConfigValidator:
                     self.errors.append(f"Model {i} ({config.name}): Invalid endpoint URL")
             
             # Validate sampling parameters
-            if config.temperature < 0 or config.temperature > 2:
+            inference_config = config.inference_params or {}
+            if inference_config.get("temperature", 0) < 0 or inference_config.get("temperature", 0) > 2:
                 self.warnings.append(f"Model {i} ({config.name}): temperature should be between 0 and 2")
-            
-            if config.top_p < 0 or config.top_p > 1:
+
+            if inference_config.get("top_p", 0) < 0 or inference_config.get("top_p", 0) > 1:
                 self.warnings.append(f"Model {i} ({config.name}): top_p should be between 0 and 1")
-            
-            if config.max_tokens < -1 or config.max_tokens == 0:
-                self.warnings.append(f"Model {i} ({config.name}): max_tokens should be -1 (unlimited) or positive")
 
     def _validate_dataset(self, dataset) -> None:
         """Validate dataset."""

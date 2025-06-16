@@ -291,6 +291,7 @@ class Config:
             else:
                 raise ValueError(f"Unsupported format: {format}")
     
+    # REVIEW: validate should be called automatically after loading, otherwise user might forget to call it
     def validate(self) -> List[str]:
         """Validate configuration and return list of errors."""
         errors = []
