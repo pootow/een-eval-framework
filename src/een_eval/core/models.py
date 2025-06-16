@@ -215,7 +215,7 @@ class OpenAIModel(ModelInterface):
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
-            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+            if key not in params and key not in ['num_samples', 'think']:  # Skip workflow-level params
                 params[key] = value
         
         # Remove None values and handle max_tokens
@@ -310,7 +310,7 @@ class VLLMModel(ModelInterface):
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
-            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+            if key not in params and key not in ['num_samples', 'think']:  # Skip workflow-level params
                 params[key] = value
         
         # Remove None values and handle max_tokens
@@ -478,7 +478,7 @@ class LlamaCppModel(ModelInterface):
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
-            if key not in params and key not in ['num_samples']:  # Skip workflow-level params
+            if key not in params and key not in ['num_samples', 'think']:  # Skip workflow-level params
                 params[key] = value
         
         # Remove None values and handle max_tokens

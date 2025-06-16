@@ -27,8 +27,8 @@ class PromptProcessor:
             autoescape=False
         )
         self.logger = logging.getLogger(__name__)
-    
-    def process_prompt(self, item: DatasetItem, template: Optional[str] = None) -> str:
+
+    def process_prompt(self, item: DatasetItem, template: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> str:
         """Process a single prompt from dataset item."""
         template_str = template or self.template
         
@@ -45,8 +45,11 @@ class PromptProcessor:
                 return str(item.data)
         
         try:
+            # merge item data into context
+            context = context or {}
+            context.update(item.data)
             template_obj = self.jinja_env.from_string(template_str)
-            return template_obj.render(**item.data)
+            return template_obj.render(**context)
         except Exception as e:
             self.logger.error(f"Failed to process prompt for item {item.id}: {e}")
             # Fallback to raw data
@@ -323,7 +326,10 @@ class InferenceEngine:
                 prompt = ""
                 try:
                     # Process prompt
-                    prompt = self.prompt_processor.process_prompt(item)
+                    prompt = self.prompt_processor.process_prompt(item, context={
+                        "engine": self,
+                        "model": model
+                    })
 
                     # Generate response
                     simple_result = model.generate(prompt, global_sample_params=self.sample_params)
