@@ -8,8 +8,11 @@ and response collection with support for batching and resumption.
 import time
 import logging
 import threading
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import threading
+import logging
 import jinja2
 
 from ..core.models import Model, InferenceResult
@@ -216,7 +219,7 @@ class InferenceEngine:
         
         # Create batches
         batches = self._create_batches()
-        
+
         # Process batches
         if self.max_workers > 1:
             model_results = self._run_parallel_inference(model, batches, status)
@@ -225,19 +228,24 @@ class InferenceEngine:
         
         return model_results
     
-    def _create_batches(self) -> List[List[DatasetItem]]:
-        """Create batches from dataset items."""
-        # REVIEW: this batching is wrong, it batches items, not samples
+    def _create_batches(self) -> List[List[Tuple[DatasetItem, int]]]:
+        """Create batches from samples (item, sample_index pairs)."""
+        # Create all samples first
+        all_samples = []
+        for item in self.dataset:
+            for sample_idx in range(self.num_samples):
+                all_samples.append((item, sample_idx))
+          # Create batches of samples
         batches = []
-        for i in range(0, len(self.dataset), self.batch_size):
-            batch = self.dataset[i:i + self.batch_size]
+        for i in range(0, len(all_samples), self.batch_size):
+            batch = all_samples[i:i + self.batch_size]
             batches.append(batch)
         return batches
 
     def _run_sequential_inference(
         self,
         model: Model,
-        batches: List[List[DatasetItem]],
+        batches: List[List[Tuple[DatasetItem, int]]],
         status
     ) -> List[InferenceResult]:
         """Run inference sequentially."""
@@ -250,23 +258,18 @@ class InferenceEngine:
             with self._lock:
                 results.extend(batch_results)
                 
-                # Update status and save intermediate results
+                # Update status and save intermediate results after batch completion
                 self.completed_samples += len(batch_results)
                 status.processed_samples = self.completed_samples
                 
                 if self.output_manager:
-                    # Only save new results (not existing ones)
-                    new_results = [r for r in batch_results if r not in self.existing_responses.values()]
-                    if new_results:
-                        self.output_manager.save_responses_batch(new_results)
                     self.output_manager.save_status(status)
-        
         return results
 
     def _run_parallel_inference(
         self, 
         model: Model, 
-        batches: List[List[DatasetItem]], 
+        batches: List[List[Tuple[DatasetItem, int]]], 
         status
     ) -> List[InferenceResult]:
         """Run inference in parallel."""
@@ -284,20 +287,16 @@ class InferenceEngine:
                 batch = future_to_batch[future]
                 try:
                     batch_results = future.result()
-                    
+
                     # Thread-safe updates using lock
                     with self._lock:
                         results.extend(batch_results)
                         
-                        # Update status and save intermediate results
+                        # Update status and save intermediate results after batch completion
                         self.completed_samples += len(batch_results)
                         status.processed_samples = self.completed_samples
                         
                         if self.output_manager:
-                            # Only save new results (not existing ones)
-                            new_results = [r for r in batch_results if r not in self.existing_responses.values()]
-                            if new_results:
-                                self.output_manager.save_responses_batch(new_results)
                             self.output_manager.save_status(status)
                         
                 except Exception as e:
@@ -308,107 +307,113 @@ class InferenceEngine:
         
         return results
 
-    def _process_batch(self, model: Model, batch: List[DatasetItem]) -> List[InferenceResult]:
-        """Process a single batch of items."""
+    def _process_single_sample(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
+        """Process a single sample for an item."""
+        # Check if sample already exists when resuming
+        if self.resume and self._is_sample_completed(model.name, item.id, sample_idx):
+            existing_result = self._get_existing_sample(model.name, item.id, sample_idx)
+            if existing_result:
+                self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
+                return existing_result
+        
+        prompt = ""
+        try:
+            # Process prompt
+            prompt = self.prompt_processor.process_prompt(item, context={
+                "engine": self,
+                "model": model
+            })
+
+            # Generate response
+            simple_result = model.generate(prompt, global_sample_params=self.sample_params)
+            
+            # Create full InferenceResult
+            if simple_result.error:
+                # Handle error case
+                result = InferenceResult(
+                    item_id=item.id,
+                    sample_id=f"{item.id}_sample_{sample_idx}",
+                    sample_index=sample_idx,
+                    total_samples=self.num_samples,
+                    model_name=model.name,
+                    prompt=prompt,
+                    response="",
+                    inference_time=simple_result.inference_time,
+                    timestamp=time.time(),
+                    ground_truth=item.data,
+                    error=simple_result.error,
+                    metadata={
+                        "model_id": model.name,
+                        "prompt_template": self.prompt_processor.template,
+                        "sampling": self.sample_params,
+                        **simple_result.metadata
+                    },
+                    tokens_per_second=simple_result.tokens_per_second,
+                    total_tokens=simple_result.total_tokens,
+                    prompt_tokens=simple_result.prompt_tokens,
+                    completion_tokens=simple_result.completion_tokens
+                )
+            else:
+                # Success case
+                result = InferenceResult(
+                    item_id=item.id,
+                    sample_id=f"{item.id}_sample_{sample_idx}",
+                    sample_index=sample_idx,
+                    total_samples=self.num_samples,
+                    model_name=model.name,
+                    prompt=prompt,
+                    response=simple_result.response,
+                    inference_time=simple_result.inference_time,
+                    timestamp=time.time(),
+                    ground_truth=item.data,
+                    metadata={
+                        "model_id": model.name,
+                        "prompt_template": self.prompt_processor.template,
+                        "sampling": self.sample_params,
+                        **simple_result.metadata
+                    },
+                    tokens_per_second=simple_result.tokens_per_second,
+                    total_tokens=simple_result.total_tokens,
+                    prompt_tokens=simple_result.prompt_tokens,
+                    completion_tokens=simple_result.completion_tokens
+                )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")
+            # Create error result
+            error_result = InferenceResult(
+                item_id=item.id,
+                sample_id=f"{item.id}_sample_{sample_idx}",
+                sample_index=sample_idx,
+                total_samples=self.num_samples,
+                model_name=model.name,
+                prompt=prompt,
+                response="",
+                inference_time=0.0,
+                timestamp=time.time(),
+                ground_truth=item.data,
+                error=str(e),
+                metadata={
+                    "model_id": model.name,
+                    "prompt_template": self.prompt_processor.template,
+                    "sampling": self.sample_params
+                }
+            )
+            return error_result
+
+    def _process_batch(self, model: Model, batch: List[Tuple[DatasetItem, int]]) -> List[InferenceResult]:
+        """Process a single batch of samples."""
         batch_results = []
         
-        for item in batch:
-            # Generate multiple samples for each item
-            for sample_idx in range(self.num_samples):
-                # Check if sample already exists when resuming
-                if self.resume and self._is_sample_completed(model.name, item.id, sample_idx):
-                    existing_result = self._get_existing_sample(model.name, item.id, sample_idx)
-                    if existing_result:
-                        batch_results.append(existing_result)
-                        self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
-                        continue
-                
-                prompt = ""
-                try:
-                    # Process prompt
-                    prompt = self.prompt_processor.process_prompt(item, context={
-                        "engine": self,
-                        "model": model
-                    })
-
-                    # Generate response
-                    simple_result = model.generate(prompt, global_sample_params=self.sample_params)
-                    
-                    # Create full InferenceResult
-                    if simple_result.error:
-                        # Handle error case
-                        result = InferenceResult(
-                            item_id=item.id,
-                            sample_id=f"{item.id}_sample_{sample_idx}",
-                            sample_index=sample_idx,
-                            total_samples=self.num_samples,
-                            model_name=model.name,
-                            prompt=prompt,
-                            response="",
-                            inference_time=simple_result.inference_time,
-                            timestamp=time.time(),
-                            ground_truth=item.data,
-                            error=simple_result.error,
-                            metadata={
-                                "model_id": model.name,
-                                "prompt_template": self.prompt_processor.template,
-                                "sampling": self.sample_params,
-                                **simple_result.metadata
-                            },
-                            tokens_per_second=simple_result.tokens_per_second,
-                            total_tokens=simple_result.total_tokens,
-                            prompt_tokens=simple_result.prompt_tokens,
-                            completion_tokens=simple_result.completion_tokens
-                        )
-                    else:
-                        # Success case
-                        result = InferenceResult(
-                            item_id=item.id,
-                            sample_id=f"{item.id}_sample_{sample_idx}",
-                            sample_index=sample_idx,
-                            total_samples=self.num_samples,
-                            model_name=model.name,
-                            prompt=prompt,
-                            response=simple_result.response,
-                            inference_time=simple_result.inference_time,
-                            timestamp=time.time(),
-                            ground_truth=item.data,
-                            metadata={
-                                "model_id": model.name,
-                                "prompt_template": self.prompt_processor.template,
-                                "sampling": self.sample_params,
-                                **simple_result.metadata
-                            },
-                            tokens_per_second=simple_result.tokens_per_second,
-                            total_tokens=simple_result.total_tokens,
-                            prompt_tokens=simple_result.prompt_tokens,
-                            completion_tokens=simple_result.completion_tokens
-                        )
-                    
-                    batch_results.append(result)
-                    
-                except Exception as e:
-                    self.logger.error(f"Failed to process item {item.id}, sample {sample_idx}: {e}")
-                    # Create error result
-                    error_result = InferenceResult(
-                        item_id=item.id,
-                        sample_id=f"{item.id}_sample_{sample_idx}",
-                        sample_index=sample_idx,
-                        total_samples=self.num_samples,
-                        model_name=model.name,
-                        prompt=prompt,
-                        response="",
-                        inference_time=0.0,
-                        timestamp=time.time(),
-                        ground_truth=item.data,
-                        error=str(e),
-                        metadata={
-                            "model_id": model.name,
-                            "prompt_template": self.prompt_processor.template,
-                            "sampling": self.sample_params
-                        }
-                    )
-                    batch_results.append(error_result)
+        for item, sample_idx in batch:
+            result = self._process_single_sample(model, item, sample_idx)
+            batch_results.append(result)
+            
+            # Save response and status immediately after each sample completion
+            if self.output_manager and result not in self.existing_responses.values():
+                self.output_manager.save_responses_batch([result])
         
         return batch_results
 
