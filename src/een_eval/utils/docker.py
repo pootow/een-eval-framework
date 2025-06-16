@@ -270,7 +270,9 @@ class DockerManager:
             "--port", str(container_port),
             "--host", host,
             "-c", str(context_size),
-            "--n-gpu-layers", str(n_gpu_layers)
+            "--n-gpu-layers", str(n_gpu_layers),
+            "--threads", "1",
+            "--flash-attn"
         ]
         
         # Add optional parameters
