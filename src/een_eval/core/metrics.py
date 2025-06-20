@@ -68,16 +68,17 @@ class Metric(ABC):
             # if both raise error
             if "include" in self.labels and "exclude" in self.labels:
                 raise ValueError("Cannot use both 'include' and 'exclude' labels in metric configuration.")
-            if "include" in self.labels:
+            if "include" in self.labels and self.labels["include"]:
                 # only include specified labels
                 include_labels = set(self.labels["include"])
                 evaluation_results = [r for r in evaluation_results if r.get("label") in include_labels]
-            elif "exclude" in self.labels:
+            elif "exclude" in self.labels and self.labels["exclude"]:
                 # exclude specified labels
                 exclude_labels = set(self.labels["exclude"])
                 evaluation_results = [r for r in evaluation_results if r.get("label") not in exclude_labels]
             else:
-                raise ValueError("Labels configuration must contain either 'include' or 'exclude' key.")
+                # if labels is empty, use all labels, don't need filter anything
+                pass
 
         # Always include label as an implicit facet for grouping
         # Group by facets and calculate for each group
@@ -287,7 +288,7 @@ class PassAtKMetric(Metric):
         items_dict = self._group_by_item_id(evaluation_results)
         
         pass_at_k_values = []
-        total_samples = sum(len(results) for results in items_dict.values())
+        total_sample_count = sum(len(results) for results in items_dict.values()) # REVIEW: this does not seems to have any use, maybe remove it
 
         min_samples_per_item = min(len(results) for results in items_dict.values())
         min_samples_needed = self.k * self.num_trials
@@ -321,11 +322,20 @@ class PassAtKMetric(Metric):
         else:
             pass_at_k = statistics.mean(pass_at_k_values) if pass_at_k_values else 0.0
 
+        # include self.num_trials if it is greater than 1
+        n_trials_prop = {}
+        if self.num_trials > 1:
+            n_trials_prop = {
+                "num_trials": self.num_trials,
+                "aggregation": self.aggregation
+            }
+
         return {
             f"pass_at_{self.k}": pass_at_k,
-            "average_sample_count": total_samples / len(items_dict) if items_dict else 0,
-            "total_sample_count": total_samples,
-            "total_item_count": len(items_dict)
+            "average_sample_count": total_sample_count / len(items_dict) if items_dict else 0,
+            "total_sample_count": total_sample_count,
+            "total_item_count": len(items_dict),
+            ** n_trials_prop
         }
     
     def _group_by_item_id(self, evaluation_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

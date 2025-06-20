@@ -77,9 +77,9 @@ class EvaluationMethod(ABC):
     
     @abstractmethod
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -172,9 +172,9 @@ class CustomEvaluationMethod(EvaluationMethod):
                 raise ValueError(f"Function {function.__name__} must have '{param}' parameter")
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -297,9 +297,9 @@ class ExactMatchEvaluation(EvaluationMethod):
         self.expected_content = expected_content
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -354,9 +354,9 @@ class ContainsEvaluation(EvaluationMethod):
         self.case_sensitive = case_sensitive
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -400,9 +400,9 @@ class RegexMatchEvaluation(EvaluationMethod):
         self.flags = flags
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -462,9 +462,9 @@ class JsonMatchEvaluation(EvaluationMethod):
         self.strict = strict
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -558,9 +558,9 @@ class NumericMatchEvaluation(EvaluationMethod):
         self.extract_pattern = extract_pattern
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -650,9 +650,9 @@ class LengthCheckEvaluation(EvaluationMethod):
         self.unit = unit
     
     def evaluate(
-        self, 
-        response: str, 
-        ground_truth: Dict[str, Any], 
+        self,
+        response: str,
+        ground_truth: Dict[str, Any] | None,
         inference_result: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:

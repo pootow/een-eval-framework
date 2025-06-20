@@ -138,7 +138,9 @@ class EvaluationEngine:
                     try:
                         # Extract response and ground truth from the result
                         response = result.get("response", "")
-                        ground_truth = result.get("ground_truth", {})
+                        # TODO: maybe 1. passing dataset on the consturctor, and get ground truth from there
+                        #       2. or config a ground truth retriever function, and retrieve by item_id
+                        ground_truth = None
                           # Apply evaluation method with timing
                         start_time = time.time()
                         evaluation_result = method.evaluate(

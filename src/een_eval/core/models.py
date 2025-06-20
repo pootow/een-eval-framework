@@ -132,13 +132,12 @@ class InferenceResult:
     item_id: str                         # Links back to original dataset item
     sample_id: str                       # Unique per sample: "{item_id}_sample_{index}"
     sample_index: int                    # 0 to num_samples-1
-    total_samples: int                   # Total samples per item (= num_samples)
+    total_samples: int                   # Total samples (= model count * items count * num_samples)
     model_name: str                      # Model name (just a friendly display name)
     prompt: str                          # Processed prompt sent to model
     response: str                        # Model's raw response
     inference_time: float                # Time taken for this inference
     timestamp: float                     # When this inference was made
-    ground_truth: Optional[Dict[str, Any]] = None  # Copy from original dataset, None if not available
     metadata: Dict[str, Any] = field(default_factory=dict)  # Additional inference-specific metadata
     error: Optional[str] = None          # Error message if inference failed
     

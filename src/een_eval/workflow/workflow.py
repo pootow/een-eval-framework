@@ -397,7 +397,7 @@ class EvalWorkflow:
         if not self._resume:
             self._status = WorkflowStatus(
                 mode=self._mode,
-                total_samples=len(self._dataset) * len(self._models) if self._dataset else 0,
+                total_samples=len(self._dataset) * len(self._models) * self._sample_params.get("num_samples", 1) if self._dataset else 0,
                 start_time=datetime.now()
             )
 

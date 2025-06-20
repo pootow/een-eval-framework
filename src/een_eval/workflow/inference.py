@@ -5,6 +5,7 @@ This module handles model inference execution, prompt processing,
 and response collection with support for batching and resumption.
 """
 
+from datetime import datetime
 import time
 import logging
 import threading
@@ -122,7 +123,6 @@ class InferenceEngine:
                     response=response_data.get('response', ''),
                     inference_time=response_data.get('inference_time', 0.0),
                     timestamp=response_data.get('timestamp', 0.0),
-                    ground_truth=response_data.get('ground_truth'),
                     metadata=response_data.get('metadata', {}),
                     error=response_data.get('error'),
                     tokens_per_second=response_data.get('tokens_per_second'),
@@ -185,6 +185,10 @@ class InferenceEngine:
         
         results = []
         
+        status.total_samples = self.total_samples
+        status.processed_samples = 0
+        status.start_time = datetime.fromtimestamp(self.start_time)
+
         # Process each model
         for model in self.models:
             self.logger.info(f"Running inference for model: {model.name}")
@@ -242,6 +246,26 @@ class InferenceEngine:
             batches.append(batch)
         return batches
 
+    def _update_status_after_batch(self, batch_results: List[InferenceResult], status) -> None:
+        """Update status and save intermediate results after batch completion."""
+        with self._lock:
+            # Update status and save intermediate results after batch completion
+            self.completed_samples += len(batch_results)
+            status.processed_samples = self.completed_samples
+            
+            if self.output_manager:
+                self.output_manager.save_status(status)
+
+    def _aggregate_batch_results(self, batch_results_generator, status) -> List[InferenceResult]:
+        """Aggregate results from batch results generator, updating results and status."""
+        results = []
+        for batch_results in batch_results_generator:
+            # Thread-safe updates (defensive programming)
+            with self._lock:
+                results.extend(batch_results)
+            self._update_status_after_batch(batch_results, status)
+        return results
+
     def _run_sequential_inference(
         self,
         model: Model,
@@ -249,22 +273,10 @@ class InferenceEngine:
         status
     ) -> List[InferenceResult]:
         """Run inference sequentially."""
-        results = []
-
-        for batch in batches:
-            batch_results = self._process_batch(model, batch)
-            
-            # Thread-safe updates (defensive programming)
-            with self._lock:
-                results.extend(batch_results)
-                
-                # Update status and save intermediate results after batch completion
-                self.completed_samples += len(batch_results)
-                status.processed_samples = self.completed_samples
-                
-                if self.output_manager:
-                    self.output_manager.save_status(status)
-        return results
+        def batch_results_generator():
+            for batch in batches:
+                yield self._process_batch(model, batch)
+        return self._aggregate_batch_results(batch_results_generator(), status)
 
     def _run_parallel_inference(
         self, 
@@ -273,39 +285,21 @@ class InferenceEngine:
         status
     ) -> List[InferenceResult]:
         """Run inference in parallel."""
-        results = []
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all batches
-            future_to_batch = {
-                executor.submit(self._process_batch, model, batch): batch
-                for batch in batches
-            }
-
-            # Collect results as they complete
-            for future in as_completed(future_to_batch):
-                batch = future_to_batch[future]
-                try:
-                    batch_results = future.result()
-
-                    # Thread-safe updates using lock
-                    with self._lock:
-                        results.extend(batch_results)
-                        
-                        # Update status and save intermediate results after batch completion
-                        self.completed_samples += len(batch_results)
-                        status.processed_samples = self.completed_samples
-                        
-                        if self.output_manager:
-                            self.output_manager.save_status(status)
-                        
-                except Exception as e:
-                    self.logger.error(f"Batch processing failed: {e}")
-                    # Thread-safe error logging
-                    with self._lock:
-                        status.errors.append(f"Batch processing: {e}")
-        
-        return results
+        def batch_results_generator():
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                future_to_batch = {
+                    executor.submit(self._process_batch, model, batch): batch
+                    for batch in batches
+                }
+                for future in as_completed(future_to_batch):
+                    try:
+                        yield future.result()
+                    except Exception as e:
+                        self.logger.error(f"Batch processing failed: {e}")
+                        with self._lock:
+                            status.errors.append(f"Batch processing: {e}")
+                        yield []
+        return self._aggregate_batch_results(batch_results_generator(), status)
 
     def _process_single_sample(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
         """Process a single sample for an item."""
@@ -340,7 +334,6 @@ class InferenceEngine:
                     response="",
                     inference_time=simple_result.inference_time,
                     timestamp=time.time(),
-                    ground_truth=item.data,
                     error=simple_result.error,
                     metadata={
                         "model_id": model.name,
@@ -365,7 +358,6 @@ class InferenceEngine:
                     response=simple_result.response,
                     inference_time=simple_result.inference_time,
                     timestamp=time.time(),
-                    ground_truth=item.data,
                     metadata={
                         "model_id": model.name,
                         "prompt_template": self.prompt_processor.template,
@@ -393,7 +385,6 @@ class InferenceEngine:
                 response="",
                 inference_time=0.0,
                 timestamp=time.time(),
-                ground_truth=item.data,
                 error=str(e),
                 metadata={
                     "model_id": model.name,
