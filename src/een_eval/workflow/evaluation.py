@@ -198,7 +198,7 @@ class EvaluationEngine:
                         evaluation_results.append(error_record)
                 
             except Exception as e:
-                self.logger.error(f"Error processing sample {idx}: {e}")
+                self.logger.error(f"Error processing sample {idx}, item: {result.get('item_id')}, sample: {result.get('sample_id')}: {e}")
                 continue
 
         return evaluation_results

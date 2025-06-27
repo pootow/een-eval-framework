@@ -90,7 +90,17 @@ class Metric(ABC):
                 continue
                 
             # Calculate metric for this facet group
-            group_result = self._calculate_single(all_results, **kwargs)
+            try:
+                group_result = self._calculate_single(all_results, **kwargs)
+            except EvaluationError as e:
+                logger.error(f"Error calculating metric {self.name} for facet {facet_key}: {e}")
+                group_result = {
+                    "value": 0.0,
+                    "error": str(e),
+                    "facet_key": facet_key,
+                    "metric_name": self.name,
+                    "detail": e.detail if hasattr(e, 'detail') else {}
+                }
             # Parse facet values and create result dict
             facet_dict: Dict[str, Any] = {"facets": used_facets}
             facet_values = facet_key.split('+')
@@ -111,6 +121,14 @@ class Metric(ABC):
             results.append(final_result)
         
         return results
+    
+    def _group_by_item_id(self, evaluation_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group results by item_id only."""
+        grouped = defaultdict(list)
+        for result in evaluation_results:
+            item_id = result.get("item_id", "unknown")
+            grouped[item_id].append(result)
+        return grouped
     
     @abstractmethod
     def _calculate_single(
@@ -256,6 +274,7 @@ class BuiltInMetric(Metric):
         """Create built-in metric."""
         metric_map = {
             "pass_at_k": PassAtKMetric,
+            "classification": ClassificationMetric,
             "mean": MeanMetric,
             "median": MedianMetric,
             "percentile": PercentileMetric,
@@ -268,6 +287,14 @@ class BuiltInMetric(Metric):
         
         return metric_map[metric_type](metric_name, facets=facets, **params)
 
+class EvaluationError(Exception):
+    """Custom error for evaluation-related issues."""
+
+    detail: Dict[str, Any]
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.detail = {}
 
 class PassAtKMetric(Metric):
     """Pass@K metric calculation."""
@@ -293,7 +320,18 @@ class PassAtKMetric(Metric):
         min_samples_per_item = min(len(results) for results in items_dict.values())
         min_samples_needed = self.k * self.num_trials
         if min_samples_per_item < min_samples_needed:
-            raise ValueError(f"Not enough samples for pass@k calculation. Need at least {min_samples_needed} samples per item, but got {min_samples_per_item}.")
+            items_low = {
+                item_id: results
+                for item_id, results in items_dict.items()
+                if len(results) < min_samples_needed
+            }
+            error = EvaluationError(
+                f"Not enough samples for pass@k calculation. Need at least {min_samples_needed} samples per item, but got {min_samples_per_item}.")
+            error.detail = {
+                "k": self.k, "num_trials": self.num_trials,
+                "items_low": items_low
+            }
+            raise error
 
         for trial_n in range(self.num_trials):
             # get results for this trial
@@ -337,14 +375,71 @@ class PassAtKMetric(Metric):
             "total_item_count": len(items_dict),
             ** n_trials_prop
         }
-    
-    def _group_by_item_id(self, evaluation_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Group results by item_id only."""
-        grouped = defaultdict(list)
-        for result in evaluation_results:
-            item_id = result.get("item_id", "unknown")
-            grouped[item_id].append(result)
-        return grouped
+
+
+class ClassificationMetric(Metric):
+    """Classification scores metric, support precision, recall, F1 and balanced accuracy scores."""
+
+    def __init__(self, name: str, num_trials: int = 1, facets: Optional[List[str]] = None, **params):
+        super().__init__(name, facets, **params)
+        self.num_trials = num_trials
+
+    def _calculate_single(
+        self, 
+        evaluation_results: List[Dict[str, Any]],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Calculate classification scores for a single group."""
+        detailed_results = [r for r in evaluation_results if r.get("detailed_results")]
+
+        # Group by item_id within this facet group
+        items_dict = self._group_by_item_id(detailed_results)
+
+        n_trials_results = {}
+        # take num_trials samples for each item_id, then flatten the results
+        n_trials_results = {
+            item_id: results[0 : self.num_trials]  # take first num_trials samples
+            for item_id, results in items_dict.items()
+        }
+        # flatten the results
+        flattened_results = []
+        for item_id, results in n_trials_results.items():
+            flattened_results.extend(results)
+
+        tp = sum(1 for r in flattened_results if r.get("detailed_results", {}).get("tp", False))
+        tn = sum(1 for r in flattened_results if r.get("detailed_results", {}).get("tn", False))
+        fp = sum(1 for r in flattened_results if r.get("detailed_results", {}).get("fp", False))
+        fn = sum(1 for r in flattened_results if r.get("detailed_results", {}).get("fn", False))
+
+        # precision = TP / (TP + FP)
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        # recall = TP / (TP + FN)
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        # F1 = 2 * (precision * recall) / (precision + recall)
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        # balanced accuracy = (sensitivity + specificity) / 2
+        # sensitivity = recall
+        # specificity = TN / (TN + FP)
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        balanced_accuracy = (recall + specificity) / 2 if (recall + specificity) > 0 else 0.0
+        # accuracy = (TP + TN) / (TP + TN + FP + FN)
+        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
+
+        return {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "balanced_accuracy": balanced_accuracy,
+            "true_positives": tp,
+            "false_positives": fp,
+            "true_negatives": tn,
+            "false_negatives": fn,
+            "specificity": specificity,
+            "sample_count": len(detailed_results),
+            "ignored_count": len(evaluation_results) - len(detailed_results),
+            "total_count": len(evaluation_results)
+        }
 
 
 class MeanMetric(Metric):
@@ -460,6 +555,3 @@ class CountMetric(Metric):
         return {
             "count": len(evaluation_results)
         }
-
-
-

@@ -258,7 +258,7 @@ def run_evaluation(args: argparse.Namespace) -> int:
         if results and isinstance(results, dict):
             print("\nSummary:")
             for key, value in results.items():
-                if key != 'raw_results':  # Skip large raw data
+                if key != 'detailed_results':  # Skip large raw data
                     print(f"  {key}: {value}")
         
         return 0
