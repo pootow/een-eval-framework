@@ -1,106 +1,98 @@
 # VLLM configuration for local model evaluation
-# This example shows how to use local models with VLLM and Docker
+# This example shows how to use local models with llama.cpp integration
 
 dataset:
-  file_path: "data/coding_eval.jsonl"
-  input_field: "problem"
-  expected_output_field: "solution"
-  sample_size: 100
-  # Optional filtering and preprocessing
-  filter_condition: 'difficulty == "medium"'
-  preprocessing:
-    - type: "map_field"
-      source: "problem_description"
-      target: "problem"
+  type: "file"
+  path: "data/coding_eval.jsonl"
+  params:
+    save: true
 
 models:
-  - name: "llama2-7b"
-    type: "vllm"
-    config:
-      model: "meta-llama/Llama-2-7b-chat-hf"
-      temperature: 0.0
-      max_tokens: 1024
-      docker_image: "vllm/vllm-openai:latest"
-      gpu_count: 1
-      port: 8000
-      docker_volumes:
-        - "/path/to/models:/models"
-      docker_env:
-        CUDA_VISIBLE_DEVICES: "0"
+  - name: "Qwen3-1.7B"
+    type: "llama.cpp"
+    model_path: "unsloth/Qwen3-1.7B-GGUF/Qwen3-1.7B-UD-Q4_K_XL.gguf"
+    endpoint: "http://localhost:28000/v1"
+    docker:
+      models_volume: "F:\\ai-models\\LLMs-LMStudio"
+      host_port: 1236
+      n_gpu_layers: 99
+      no_mmap: true
+      context_size: 8000
+    inference:
+      think: false
   
-  - name: "codellama-13b"
-    type: "vllm"
-    config:
-      model: "codellama/CodeLlama-13b-Instruct-hf"
-      temperature: 0.1
-      max_tokens: 2048
-      docker_image: "vllm/vllm-openai:latest"
-      gpu_count: 2
-      port: 8001
+  - name: "llama2-7b-local"
+    type: "llama.cpp"
+    model_path: "meta-llama/Llama-2-7b-chat-hf"
+    endpoint: "http://localhost:28001/v1"
+    docker:
+      models_volume: "/path/to/models"
+      host_port: 1237
+      n_gpu_layers: 32
+      context_size: 4096
 
+# Custom evaluation method
 evaluation_methods:
-  - name: "exact_match"
-    type: "exact_match"
-  
-  - name: "code_execution"
+  - name: "code_evaluation"
     type: "custom"
-    function: "custom_evaluators.execute_code"
-    config:
+    path: "eval.py"
+    function_name: "evaluate_code_correctness"
+    params:
       timeout: 10
       safe_mode: true
   
-  - name: "json_structure"
-    type: "json_match"
-    config:
-      required_keys: ["code", "explanation"]
-      strict: false
-  
-  - name: "regex_pattern"
-    type: "regex_match"
-    config:
-      pattern: "def\\s+\\w+\\s*\\("
-      flags: ["IGNORECASE"]
-
-metrics:
-  - name: "pass_rate"
-    type: "pass_rate"
-  
-  - name: "execution_success"
+  - name: "qa_evaluation"  
     type: "custom"
-    function: "custom_metrics.execution_rate"
-  
-  - name: "mean_score"
-    type: "mean"
-  
-  - name: "pass_at_5"
+    path: "eval.py"
+    function_name: "evaluate_qa_responses"
+
+# Metrics for comprehensive evaluation
+metrics:
+  - name: "pass@1[mean@16]"
     type: "pass_at_k"
-    config:
-      k: 5
+    facets:
+      - model_name
+    params:
+      k: 1
+      num_trials: 16
   
-  - name: "score_distribution"
-    type: "percentile"
-    config:
-      percentiles: [25, 50, 75, 90, 95]
-
-inference:
-  batch_size: 8
-  max_workers: 4
-  timeout: 60
-  retry_attempts: 3
-
-output:
-  directory: "results/vllm_evaluation"
-  save_predictions: true
-  save_evaluations: true
-  save_intermediate: true
-  save_raw_responses: true
-
-# Optional: Custom evaluation functions
-custom_functions:
-  - name: "execute_code"
-    module: "custom_evaluators"
-    description: "Execute Python code and check output"
+  - name: "pass@16"
+    type: "pass_at_k"
+    facets:
+      - model_name
+    params:
+      k: 16
   
-  - name: "execution_rate"
-    module: "custom_metrics" 
-    description: "Calculate successful execution rate"
+  - name: "Classification Report"
+    type: "classification"
+    facets:
+      - model_name
+    params:
+      num_trials: 16
+
+# Prompt template
+prompt_template:
+  path: "code_prompt_template.md"
+
+# Global sampling parameters for generating multiple samples
+sample_params:
+  temperature: 0.1
+  max_tokens: 2048
+  num_samples: 16  # Generate 16 samples for pass@16 evaluation
+
+# Output configuration
+output_dir: "output/vllm_evaluation"
+
+# Workflow settings
+workflow:
+  mode: "inference"
+  batch_size: 1
+  max_workers: 1
+
+# Resume capability
+resume: true
+
+# Logging configuration
+logging:
+  level: "DEBUG"
+  file: "vllm_eval.log"

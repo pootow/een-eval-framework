@@ -1,42 +1,72 @@
 #!/usr/bin/env python3
 """
 Comprehensive usage examples for the een_eval framework.
-This file demonstrates all the patterns described in README.md.
+This file demonstrates all the patterns described in README.md with the actual working API.
 """
 
 import sys
 import argparse
 from pathlib import Path
+from typing import Optional
 
 # Add the parent directory to the path so we can import een_eval
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from een_eval import EvalWorkflow
+from een_eval import EvalWorkflow, Model, ModelConfig, ModelType
 from een_eval.core.evaluation import EvaluationMethod
 from een_eval.core.metrics import Metric
 
 
-def example_1_builder_pattern():
-    """Example 1: Builder pattern from README.md"""
-    print("=== Example 1: Builder Pattern ===")
+def example_1_constructor_pattern():
+    """Example 1: Constructor pattern - actual working API"""
+    print("=== Example 1: Constructor Pattern ===")
 
-    import os
-    os.chdir(Path(__file__).parent.parent.parent / "eval-workspace" / "prod2")
+    # Create evaluation function following the actual interface
+    def evaluate_code_correctness(response: str, ground_truth: dict, inference_result: Optional[dict] = None, **params) -> dict:
+        """Custom evaluation function matching DataFlow.md spec"""
+        expected = ground_truth.get("solution", "")
+        
+        # Simple correctness check (in practice, would run tests)
+        is_correct = expected.lower() in response.lower()
+        
+        return {
+            "labels": [
+                {
+                    "label": {"name": "code_correctness"},
+                    "result": {
+                        "passed": is_correct,
+                        "score": 1.0 if is_correct else 0.0,
+                    }
+                }
+            ]
+        }
     
-    workflow = (EvalWorkflow()
-        .add_models(["deepseek-v3", "claude-3.5-sonnet"])
-        .load_dataset("output/qc_dataset.jsonl")
-        .add_evaluation_method("qc_correctness", "gauges/qc_eval.py")
-        .add_metric("domain_accuracy", "gauges/qc_metrics.py") 
-        .set_sample_params(temperature=0.1, max_tokens=1024)
-        .set_prompt_template("Problem: {{ problem }}\nConstraints: {{ constraints }}\nSolution:"))
+    # Create workflow using constructor (actual working API)
+    workflow = EvalWorkflow(
+        dataset="datasets/qc_problems.jsonl",
+        sample_params={"temperature": 0.1, "max_tokens": 1024},
+        eval_prompt_template="Problem: {{ problem }}\nConstraints: {{ constraints }}\nSolution:",
+        evaluation_methods=[
+            EvaluationMethod.from_function(
+                name="qc_correctness",
+                function=evaluate_code_correctness
+            )
+        ],
+        metrics=[
+            Metric.from_function(
+                name="accuracy_metric",
+                function=calculate_accuracy
+            )
+        ],
+        output_dir="results/constructor_example",
+        mode="inference"
+    )
 
-    print(f"Configured workflow with {len(workflow._models)} models")
-    print(f"Evaluation methods: {[m.name for m in workflow._evaluation_methods]}")
-    print(f"Metrics: {[m.name for m in workflow._metrics]}")
-    
-    # results = workflow.run()  # Uncomment to actually run
-    print("Builder pattern workflow created successfully!\n")
+    # Add models
+    workflow.add_models([Model.from_name("deepseek-v3")])
+
+    print(f"Configured workflow with evaluation method: qc_correctness")
+    print("Constructor pattern workflow created successfully!\n")
 
 
 def example_2_config_file():
