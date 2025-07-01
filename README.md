@@ -408,11 +408,14 @@ docker pull your-llama-cpp-image:latest
 ## CLI Reference
 
 ```bash
-# Run evaluation from config
+# Run evaluation with configuration file
 een-eval run --config config.yaml --verbose
 
-# Run evaluation only (after inference)
-een-eval eval --config config.yaml
+# Run evaluation only (after inference completed)
+een-eval eval --config config.yaml --output-dir results/eval_20231201_120000
+
+# Run full evaluation (inference + evaluation)
+een-eval run --config config.yaml --mode full
 
 # Check help
 een-eval --help

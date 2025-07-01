@@ -47,14 +47,11 @@ een_eval run \
 from een_eval import EvalWorkflow
 
 # Simple evaluation
-workflow = (EvalWorkflow.builder()
-            .dataset_from_file("data/qa.jsonl", 
-                             input_field="question",
-                             expected_output_field="answer")
-            .add_openai_model("gpt-3.5-turbo")
-            .add_evaluation_method("exact_match")
-            .add_metric("pass_rate")
-            .build())
+workflow = EvalWorkflow(
+    dataset="data/qa.jsonl",
+    sample_params={"temperature": 0.0, "max_tokens": 100}
+).add_evaluation_method("exact_match") \
+ .add_metric("pass_rate")
 
 results = workflow.run()
 ```
