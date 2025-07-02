@@ -72,6 +72,7 @@ class EvalWorkflow:
         mode: str = "inference",
         resume: bool = False,
         config: Optional[Union[str, Dict[str, Any], Config]] = None,
+        inference_engine_cls: Optional[type] = None,  # <-- NEW
         **kwargs
     ):
         """
@@ -100,6 +101,7 @@ class EvalWorkflow:
         self._mode: str = mode
         self._resume: bool = resume
         self._config: Optional[Config] = None
+        self._inference_engine_cls = inference_engine_cls  # <-- NEW
         
         # Internal state
         self._status = WorkflowStatus()
@@ -137,7 +139,8 @@ class EvalWorkflow:
     def from_config(
         cls, 
         config_path: str, 
-        overrides: Optional[Dict[str, Any]] = None
+        overrides: Optional[Dict[str, Any]] = None,
+        inference_engine_cls: Optional[type] = None
     ) -> "EvalWorkflow":
         """
         Create workflow from configuration file.
@@ -149,7 +152,7 @@ class EvalWorkflow:
         Returns:
             Configured EvalWorkflow instance
         """
-        workflow = cls(config=config_path)
+        workflow = cls(config=config_path, inference_engine_cls=inference_engine_cls)
         if overrides:
             for key, value in overrides.items():
                 if hasattr(workflow, f"_set_{key}"):
@@ -295,6 +298,25 @@ class EvalWorkflow:
         # REVIEW: find if any other parameters forget to apply from config
 
         self._config.setup_environment()
+        # Support custom inference engine from config (file path or module)
+        from een_eval.utils.module_loader import CustomLoader
+        engine_spec = getattr(self._config, 'inference_engine', None)
+        if engine_spec:
+            if isinstance(engine_spec, dict):
+                path = engine_spec.get('path')
+                class_name = engine_spec.get('class')
+                module = engine_spec.get('module')
+                if path:
+                    self._inference_engine_cls = CustomLoader.load_object(path=path, object_name=class_name)
+                elif module:
+                    self._inference_engine_cls = CustomLoader.load_object(module=module, object_name=class_name)
+            elif isinstance(engine_spec, str):
+                # fallback: treat as module path
+                module_name, class_name = engine_spec.rsplit('.', 1)
+                import importlib
+                module = importlib.import_module(module_name)
+                self._inference_engine_cls = getattr(module, class_name)
+
     
     def _set_models(self, models: List[Union[str, Model, ModelConfig]]) -> None:
         """Set models for evaluation."""
@@ -375,8 +397,8 @@ class EvalWorkflow:
         # Setup engines
         if not self._dataset:
             raise ValueError("Dataset must be specified")
-        
-        self._inference_engine = InferenceEngine(
+        engine_cls = self._inference_engine_cls or InferenceEngine  # <-- NEW
+        self._inference_engine = engine_cls(
             models=self._models,
             dataset=self._dataset,
             sample_params=self._sample_params,

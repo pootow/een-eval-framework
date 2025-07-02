@@ -123,6 +123,7 @@ class Config:
     
     # Environment configuration
     env_vars: Dict[str, str] = field(default_factory=dict)
+    inference_engine: Optional[Union[str, Dict[str, str]]] = None  # Custom inference engine support
     
     @classmethod
     def from_file(cls, config_path: str) -> "Config":
@@ -206,6 +207,9 @@ class Config:
             config.log_file = logging_data.get("file")
 
         config.env_vars = data.get("env_vars", {})
+        
+        # Load custom inference engine if specified
+        config.inference_engine = data.get("inference_engine")
         
         return config
     
