@@ -301,6 +301,13 @@ class InferenceEngine:
                         yield []
         return self._aggregate_batch_results(batch_results_generator(), status)
 
+    def _prepare_prompt(self, model: Model, item: DatasetItem) -> str:
+        """Prepare the prompt for a given model and dataset item."""
+        return self.prompt_processor.process_prompt(item, context={
+            "engine": self,
+            "model": model
+        })
+
     def _process_single_sample(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
         """Process a single sample for an item."""
         # Check if sample already exists when resuming
@@ -309,14 +316,14 @@ class InferenceEngine:
             if existing_result:
                 self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
                 return existing_result
-        
+
+        return self._do_single_sample_inference(model, item, sample_idx)
+
+    def _do_single_sample_inference(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
         prompt = ""
         try:
             # Process prompt
-            prompt = self.prompt_processor.process_prompt(item, context={
-                "engine": self,
-                "model": model
-            })
+            prompt = self._prepare_prompt(model, item)
 
             # Generate response
             simple_result = model.generate(prompt, global_sample_params=self.sample_params)
