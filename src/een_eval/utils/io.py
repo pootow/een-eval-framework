@@ -370,8 +370,19 @@ class OutputManager:
             self.logger.error(f"Failed to rewrite responses file: {e}")
     
     def clear_responses_file(self) -> None:
-        """Clear the responses.jsonl file."""
+        """Clear the responses.jsonl file, backing up the old file first."""
         try:
+            # Backup if file exists and is not empty
+            if self.responses_file.exists() and self.responses_file.stat().st_size > 0:
+                backup_idx = 1
+                backup_file = self.output_dir / "responses.jsonl.bak"
+                # Find next available backup filename
+                while backup_file.exists():
+                    backup_file = self.output_dir / f"responses.jsonl.bak{backup_idx}"
+                    backup_idx += 1
+                self.responses_file.rename(backup_file)
+                self.logger.debug(f"Backed up responses.jsonl to {backup_file}")
+            # Now clear (create empty file)
             with open(self.responses_file, 'w', encoding='utf-8') as f:
                 pass  # Just create empty file
             self.logger.debug("Cleared responses.jsonl file")
