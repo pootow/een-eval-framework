@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
 import openai
-import requests
 import time
 import random
 import logging
@@ -196,6 +195,41 @@ class OpenAIModel(ModelInterface):
             base_url=config.endpoint
         )
 
+    def _openai_chat_completion(self, params: dict):
+        """Non-streaming OpenAI chat completion call."""
+        response = self.client.chat.completions.create(**params)
+        return response
+
+    def _openai_chat_completion_stream(self, params: dict):
+        """Streaming OpenAI chat completion call."""
+        return self.client.chat.completions.create(**params, stream=True, stream_options={"include_usage": True})
+
+    def _openai_chat_completion_stream_to_string(self, params: dict):
+        """Use streaming OpenAI API to simulate non-streaming response (aggregate chunks)."""
+        stream = self._openai_chat_completion_stream(params)
+        content = ""
+        response_id = None
+        finish_reason = None
+        usage = None
+        for chunk in stream:
+            if hasattr(chunk, 'choices') and chunk.choices:
+                delta = chunk.choices[0].delta
+                if hasattr(delta, 'content') and delta.content:
+                    content += delta.content
+                if hasattr(chunk.choices[0], 'finish_reason'):
+                    finish_reason = chunk.choices[0].finish_reason
+            if hasattr(chunk, 'id'):
+                response_id = chunk.id
+            if hasattr(chunk, 'usage'):
+                usage = chunk.usage
+        # Compose a mock response object similar to non-streaming
+        class MockResponse:
+            def __init__(self, content, finish_reason, response_id, usage):
+                self.choices = [type('obj', (object,), {'message': type('obj', (object,), {'content': content}), 'finish_reason': finish_reason})]
+                self.id = response_id
+                self.usage = usage
+        return MockResponse(content, finish_reason, response_id, usage)
+
     def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate response using OpenAI API."""
         start_time = time.time()
@@ -207,10 +241,13 @@ class OpenAIModel(ModelInterface):
         params = {
             "model": self.config.name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": merged_params.get("temperature", 0.7),
-            "top_p": merged_params.get("top_p", 1.0),
             "max_tokens": merged_params.get("max_tokens", -1),
         }
+        # Only add temperature/top_p if present in merged_params
+        if "temperature" in merged_params:
+            params["temperature"] = merged_params["temperature"]
+        if "top_p" in merged_params:
+            params["top_p"] = merged_params["top_p"]
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
@@ -221,13 +258,13 @@ class OpenAIModel(ModelInterface):
         if params.get("max_tokens", -1) <= 0:
             params.pop("max_tokens", None)
         params = {k: v for k, v in params.items() if v is not None}
-        
+
         try:
-            response = self.client.chat.completions.create(**params)
-            end_time = time.time()
-            
-            inference_time = end_time - start_time
+            response = self._openai_chat_completion_stream_to_string(params)
             content = response.choices[0].message.content
+
+            end_time = time.time()
+            inference_time = end_time - start_time
             
             # Calculate tokens per second if usage info is available
             total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
@@ -302,10 +339,12 @@ class VLLMModel(ModelInterface):
         params = {
             "model": self.config.name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": merged_params.get("temperature", 0.7),
-            "top_p": merged_params.get("top_p", 1.0),
             "max_tokens": merged_params.get("max_tokens", -1),
         }
+        if "temperature" in merged_params:
+            params["temperature"] = merged_params["temperature"]
+        if "top_p" in merged_params:
+            params["top_p"] = merged_params["top_p"]
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
@@ -482,10 +521,12 @@ class LlamaCppModel(ModelInterface):
         params = {
             "model": self.config.name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": merged_params.get("temperature", 0.7),
-            "top_p": merged_params.get("top_p", 1.0),
             "max_tokens": merged_params.get("max_tokens", -1),
         }
+        if "temperature" in merged_params:
+            params["temperature"] = merged_params["temperature"]
+        if "top_p" in merged_params:
+            params["top_p"] = merged_params["top_p"]
         
         # Add any additional parameters from merged_params
         for key, value in merged_params.items():
