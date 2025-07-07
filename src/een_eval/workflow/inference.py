@@ -15,6 +15,7 @@ import time
 import threading
 import logging
 import jinja2
+import random
 
 from ..core.models import Model, InferenceResult
 from ..core.dataset import Dataset, DatasetItem
@@ -173,12 +174,13 @@ class InferenceEngine:
         # Save inference metadata
         metadata = {
             "start_time": time.time(),
-            "models": [model.name for model in self.models],
+            "models": [{'name': model.name, 'params': model.config.inference_params} for model in self.models],
             "dataset_size": len(self.dataset),
             "sample_params": self.sample_params,
             "prompt_template": self.prompt_processor.template,
             "batch_size": self.batch_size,
-            "max_workers": self.max_workers
+            "max_workers": self.max_workers,
+            "sample_params": self.sample_params,
         }
         if self.output_manager:
             self.output_manager.save_inference_metadata(metadata)
@@ -212,7 +214,6 @@ class InferenceEngine:
 
         self.logger.info(f"Inference completed in {total_time:.2f}s")
         return {
-            "results": results,
             "statistics": stats,
             "status": status.to_dict()
         }
@@ -248,21 +249,18 @@ class InferenceEngine:
 
     def _update_status_after_batch(self, batch_results: List[InferenceResult], status) -> None:
         """Update status and save intermediate results after batch completion."""
-        with self._lock:
-            # Update status and save intermediate results after batch completion
-            self.completed_samples += len(batch_results)
-            status.processed_samples = self.completed_samples
-            
-            if self.output_manager:
-                self.output_manager.save_status(status)
+        # Update status and save intermediate results after batch completion
+        self.completed_samples += len(batch_results)
+        status.processed_samples = self.completed_samples
+        
+        if self.output_manager:
+            self.output_manager.save_status(status)
 
     def _aggregate_batch_results(self, batch_results_generator, status) -> List[InferenceResult]:
         """Aggregate results from batch results generator, updating results and status."""
         results = []
         for batch_results in batch_results_generator:
-            # Thread-safe updates (defensive programming)
-            with self._lock:
-                results.extend(batch_results)
+            results.extend(batch_results)
             self._update_status_after_batch(batch_results, status)
         return results
 
@@ -284,14 +282,15 @@ class InferenceEngine:
         batches: List[List[Tuple[DatasetItem, int]]], 
         status
     ) -> List[InferenceResult]:
-        """Run inference in parallel."""
+        """Run inference in parallel, submitting jobs with a random delay between each submission."""
         def batch_results_generator():
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                future_to_batch = {
-                    executor.submit(self._process_batch, model, batch): batch
-                    for batch in batches
-                }
-                for future in as_completed(future_to_batch):
+                futures = []
+                for batch in batches:
+                    futures.append(executor.submit(self._process_batch, model, batch))
+                    # Sleep for a random delay between submissions
+                    time.sleep(random.uniform(0.1, 1.0))  # Adjust range as needed
+                for future in as_completed(futures):
                     try:
                         yield future.result()
                     except Exception as e:
@@ -411,7 +410,8 @@ class InferenceEngine:
             
             # Save response and status immediately after each sample completion
             if self.output_manager and result not in self.existing_responses.values():
-                self.output_manager.save_responses_batch([result])
+                with self._lock:
+                    self.output_manager.save_responses_batch([result])
         
         return batch_results
 
