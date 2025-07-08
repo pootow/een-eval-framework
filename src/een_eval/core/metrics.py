@@ -320,16 +320,17 @@ class PassAtKMetric(Metric):
         min_samples_per_item = min(len(results) for results in items_dict.values())
         min_samples_needed = self.k * self.num_trials
         if min_samples_per_item < min_samples_needed:
-            items_low = {
-                item_id: results
-                for item_id, results in items_dict.items()
-                if len(results) < min_samples_needed
-            }
+            ## NOTE I am not sure why I added this, it's too detail and will mess the whole metrics file.
+            # items_low = {
+            #     item_id: results
+            #     for item_id, results in items_dict.items()
+            #     if len(results) < min_samples_needed
+            # }
             error = EvaluationError(
                 f"Not enough samples for pass@k calculation. Need at least {min_samples_needed} samples per item, but got {min_samples_per_item}.")
             error.detail = {
                 "k": self.k, "num_trials": self.num_trials,
-                "items_low": items_low
+                # "items_low": items_low
             }
             raise error
 
