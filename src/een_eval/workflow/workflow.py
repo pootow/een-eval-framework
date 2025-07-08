@@ -30,6 +30,7 @@ class WorkflowStatus:
     mode: str = "inference"  # "inference", "evaluation", "complete"
     total_samples: int = 0
     processed_samples: int = 0
+    failed_samples: int = 0
     current_model: Optional[str] = None
     start_time: Optional[datetime] = None
     errors: List[str] = field(default_factory=list)
@@ -44,11 +45,12 @@ class WorkflowStatus:
         return {
             "mode": self.mode,
             "total_samples": self.total_samples,
+            "progress_percent": self.progress_percent,
             "processed_samples": self.processed_samples,
+            "failed_samples": self.failed_samples,
             "current_model": self.current_model,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "errors": self.errors,
-            "progress_percent": self.progress_percent
         }
 
 

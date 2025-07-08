@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 import logging
 import threading
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Iterator, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import threading
@@ -87,7 +87,6 @@ class InferenceEngine:
         self.logger = logging.getLogger(__name__)
 
         # State tracking
-        self.completed_samples = 0
         self.total_samples = len(dataset) * len(models) * self.num_samples
         self.start_time: Optional[float] = None
         
@@ -223,71 +222,84 @@ class InferenceEngine:
         model_results = []
         
         # Create batches
-        batches = self._create_batches()
+        existing_results, batches = self._create_batches(model, status)
 
         # Process batches
         if self.max_workers > 1:
             model_results = self._run_parallel_inference(model, batches, status)
         else:
             model_results = self._run_sequential_inference(model, batches, status)
-        
-        return model_results
-    
-    def _create_batches(self) -> List[List[Tuple[DatasetItem, int]]]:
+
+        return existing_results + list(model_results)
+
+    def _create_batches(self, model: Model, status) -> Tuple[List[InferenceResult], List[List[Tuple[DatasetItem, int]]]]:
         """Create batches from samples (item, sample_index pairs)."""
         # Create all samples first
+
+        existing_results: list[InferenceResult] = []
+
         all_samples = []
         for item in self.dataset:
             for sample_idx in range(self.num_samples):
+                # Check if sample already exists when resuming
+                if self.resume and self._is_sample_completed(model.name, item.id, sample_idx):
+                    existing_result = self._get_existing_sample(model.name, item.id, sample_idx)
+                    if existing_result:
+                        self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
+                        existing_results.append(existing_result)
+                        continue
                 all_samples.append((item, sample_idx))
-          # Create batches of samples
+        self._update_status_after_batch(existing_results, status)
+        # Create batches of samples
         batches = []
         for i in range(0, len(all_samples), self.batch_size):
             batch = all_samples[i:i + self.batch_size]
             batches.append(batch)
-        return batches
+        return existing_results, batches
 
     def _update_status_after_batch(self, batch_results: List[InferenceResult], status) -> None:
         """Update status and save intermediate results after batch completion."""
         # Update status and save intermediate results after batch completion
-        self.completed_samples += len(batch_results)
-        status.processed_samples = self.completed_samples
-        
+        for result in batch_results:
+            if result.error:
+                status.errors.append(f"Error in sample {result.sample_id}: {result.error}")
+                status.failed_samples += 1
+            else:
+                status.processed_samples += 1
+
         if self.output_manager:
             self.output_manager.save_status(status)
 
-    def _aggregate_batch_results(self, batch_results_generator, status) -> List[InferenceResult]:
-        """Aggregate results from batch results generator, updating results and status."""
-        results = []
+    def _aggregate_batch_results(self, batch_results_generator):
+        """Yield results from batch results generator as soon as available."""
         for batch_results in batch_results_generator:
-            results.extend(batch_results)
-            self._update_status_after_batch(batch_results, status)
-        return results
+            for result in batch_results:
+                yield result
 
     def _run_sequential_inference(
         self,
         model: Model,
         batches: List[List[Tuple[DatasetItem, int]]],
         status
-    ) -> List[InferenceResult]:
+    ) -> Iterator[InferenceResult]:
         """Run inference sequentially."""
         def batch_results_generator():
             for batch in batches:
-                yield self._process_batch(model, batch)
-        return self._aggregate_batch_results(batch_results_generator(), status)
+                yield self._process_batch(model, batch, status)
+        return self._aggregate_batch_results(batch_results_generator())
 
     def _run_parallel_inference(
         self, 
         model: Model, 
         batches: List[List[Tuple[DatasetItem, int]]], 
         status
-    ) -> List[InferenceResult]:
+    ) -> Iterator[InferenceResult]:
         """Run inference in parallel, submitting jobs with a random delay between each submission."""
         def batch_results_generator():
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = []
                 for batch in batches:
-                    futures.append(executor.submit(self._process_batch, model, batch))
+                    futures.append(executor.submit(self._process_batch, model, batch, status))
                     # Sleep for a random delay between submissions
                     time.sleep(random.uniform(0.1, 1.0))  # Adjust range as needed
                 for future in as_completed(futures):
@@ -298,7 +310,7 @@ class InferenceEngine:
                         with self._lock:
                             status.errors.append(f"Batch processing: {e}")
                         yield []
-        return self._aggregate_batch_results(batch_results_generator(), status)
+        return self._aggregate_batch_results(batch_results_generator())
 
     def _prepare_prompt(self, model: Model, item: DatasetItem) -> str:
         """Prepare the prompt for a given model and dataset item."""
@@ -309,13 +321,6 @@ class InferenceEngine:
 
     def _process_single_sample(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
         """Process a single sample for an item."""
-        # Check if sample already exists when resuming
-        if self.resume and self._is_sample_completed(model.name, item.id, sample_idx):
-            existing_result = self._get_existing_sample(model.name, item.id, sample_idx)
-            if existing_result:
-                self.logger.debug(f"Skipped existing sample: {model.name}_{item.id}_{sample_idx}")
-                return existing_result
-
         return self._do_single_sample_inference(model, item, sample_idx)
 
     def _do_single_sample_inference(self, model: Model, item: DatasetItem, sample_idx: int) -> InferenceResult:
@@ -400,7 +405,7 @@ class InferenceEngine:
             )
             return error_result
 
-    def _process_batch(self, model: Model, batch: List[Tuple[DatasetItem, int]]) -> List[InferenceResult]:
+    def _process_batch(self, model: Model, batch: List[Tuple[DatasetItem, int]], status) -> List[InferenceResult]:
         """Process a single batch of samples."""
         batch_results = []
         
@@ -412,6 +417,7 @@ class InferenceEngine:
             if self.output_manager and result not in self.existing_responses.values():
                 with self._lock:
                     self.output_manager.save_responses_batch([result])
+                    self._update_status_after_batch(batch_results, status)
         
         return batch_results
 
