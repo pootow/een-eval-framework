@@ -27,14 +27,24 @@ class ModelType(Enum):
 @dataclass
 class ModelConfig:
     """Configuration for a model."""
-    name: str
+    name: str # display name for the model, used in UI and logs
     type: ModelType
     
     # Model-specific parameters (not Docker-related)
     model_path: Optional[str] = None
+    _model_name: Optional[str] = None  # For OpenAI-compatible models, this is the model name, if not provided, defaults to name.
     endpoint: Optional[str] = None
     api_key: Optional[str] = None
+
+    @property
+    def model_name(self) -> str:
+        """Return the model name, defaulting to the config name if not set."""
+        return self._model_name or self.name
     
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        self._model_name = value
+
     # Docker configuration (only for local models)
     docker_config: Optional[Dict[str, Any]] = None
     
@@ -62,6 +72,7 @@ class ModelConfig:
             name=data["name"],
             type=model_type,
             model_path=data.get("model_path"),
+            _model_name=data.get("model_name"),
             endpoint=endpoint,
             api_key=data.get("api_key"),
             docker_config=data.get("docker", {}),
@@ -208,6 +219,7 @@ class OpenAIModel(ModelInterface):
         """Use streaming OpenAI API to simulate non-streaming response (aggregate chunks)."""
         stream = self._openai_chat_completion_stream(params)
         content = ""
+        reasoning_content = ""
         response_id = None
         finish_reason = None
         usage = None
@@ -216,6 +228,8 @@ class OpenAIModel(ModelInterface):
                 delta = chunk.choices[0].delta
                 if hasattr(delta, 'content') and delta.content:
                     content += delta.content
+                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                    reasoning_content += delta.reasoning_content
                 if hasattr(chunk.choices[0], 'finish_reason'):
                     finish_reason = chunk.choices[0].finish_reason
             if hasattr(chunk, 'id'):
@@ -224,11 +238,11 @@ class OpenAIModel(ModelInterface):
                 usage = chunk.usage
         # Compose a mock response object similar to non-streaming
         class MockResponse:
-            def __init__(self, content, finish_reason, response_id, usage):
-                self.choices = [type('obj', (object,), {'message': type('obj', (object,), {'content': content}), 'finish_reason': finish_reason})]
+            def __init__(self, content, reasoning_content, finish_reason, response_id, usage):
+                self.choices = [type('obj', (object,), {'message': type('obj', (object,), {'content': content, 'reasoning_content': reasoning_content}), 'finish_reason': finish_reason})]
                 self.id = response_id
                 self.usage = usage
-        return MockResponse(content, finish_reason, response_id, usage)
+        return MockResponse(content, reasoning_content, finish_reason, response_id, usage)
 
     def generate(self, prompt: str, global_sample_params: Optional[Dict[str, Any]] = None, **kwargs) -> SimpleInferenceResult:
         """Generate response using OpenAI API."""
@@ -239,7 +253,7 @@ class OpenAIModel(ModelInterface):
 
         # Build API parameters
         params = {
-            "model": self.config.name,
+            "model": self.config.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": merged_params.get("max_tokens", -1),
         }
@@ -261,7 +275,11 @@ class OpenAIModel(ModelInterface):
 
         try:
             response = self._openai_chat_completion_stream_to_string(params)
-            content = response.choices[0].message.content
+            reasoning_content = ""
+            if response.choices[0].message.reasoning_content:
+                # If reasoning content is present, use it instead of the main content
+                reasoning_content = f"<think>{response.choices[0].message.reasoning_content}</think>\n"
+            content = reasoning_content + response.choices[0].message.content
 
             end_time = time.time()
             inference_time = end_time - start_time
@@ -337,7 +355,7 @@ class VLLMModel(ModelInterface):
         
         # Build API parameters
         params = {
-            "model": self.config.name,
+            "model": self.config.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": merged_params.get("max_tokens", -1),
         }
@@ -361,7 +379,11 @@ class VLLMModel(ModelInterface):
             end_time = time.time()
             
             inference_time = end_time - start_time
-            content = response.choices[0].message.content
+            reasoning_content = ""
+            if response.choices[0].message.reasoning_content:
+                # If reasoning content is present, use it instead of the main content
+                reasoning_content = f"<think>{response.choices[0].message.reasoning_content}</think>\n"
+            content = reasoning_content + response.choices[0].message.content
             
             # Calculate tokens per second if usage info is available
             total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
@@ -446,7 +468,7 @@ class VLLMModel(ModelInterface):
         
         self.docker_container_id = docker_manager.start_vllm_container(
             model_path=self.config.model_path,
-            model_name=self.config.name,
+            model_name=self.config.model_name,
             image=docker_image,
             host_port=self._extract_port_from_endpoint(),
             **docker_params
@@ -543,7 +565,11 @@ class LlamaCppModel(ModelInterface):
             end_time = time.time()
             
             inference_time = end_time - start_time
-            content = response.choices[0].message.content
+            reasoning_content = ""
+            if response.choices[0].message.reasoning_content:
+                # If reasoning content is present, use it instead of the main content
+                reasoning_content = f"<think>{response.choices[0].message.reasoning_content}</think>\n"
+            content = reasoning_content + response.choices[0].message.content
             
             # Calculate tokens per second if usage info is available
             total_tokens = getattr(response.usage, 'total_tokens', None) if response.usage else None
@@ -633,7 +659,7 @@ class LlamaCppModel(ModelInterface):
         
         self.docker_container_id = docker_manager.start_llamacpp_container(
             model_path=self.config.model_path,
-            model_name=self.config.name,
+            model_name=self.config.model_name,
             image=docker_image,
             **docker_params
         )
