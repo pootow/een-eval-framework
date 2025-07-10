@@ -399,7 +399,7 @@ class EvalWorkflow:
         # Setup engines
         if not self._dataset:
             raise ValueError("Dataset must be specified")
-        engine_cls = self._inference_engine_cls or InferenceEngine  # <-- NEW
+        engine_cls = self._inference_engine_cls or InferenceEngine
         self._inference_engine = engine_cls(
             models=self._models,
             dataset=self._dataset,
@@ -408,7 +408,8 @@ class EvalWorkflow:
             output_manager=self._output_manager,
             batch_size=self._config.batch_size if self._config else 1,
             max_workers=self._config.max_workers if self._config else 1,
-            resume=self._resume
+            resume=self._resume,
+            limit=self._config.limit if self._config else None
         )
         
         self._evaluation_engine = EvaluationEngine(

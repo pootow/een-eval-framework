@@ -108,6 +108,7 @@ class Config:
     max_workers: int = 4
     timeout: int = 300
     max_retries: int = 3
+    limit: Optional[int] = None  # Limit number of samples processed
     
     # Output configuration
     output_dir: Optional[str] = None
@@ -200,6 +201,7 @@ class Config:
         config.save_intermediate = data.get("save_intermediate", True)
         config.resume = data.get("resume", False)
         config.resume_from = data.get("resume_from")
+        config.limit = data.get("limit", None)
 
         if "logging" in data:
             logging_data = data["logging"]

@@ -238,7 +238,10 @@ def run_evaluation(args: argparse.Namespace) -> int:
             config.batch_size = args.batch_size
         if args.max_workers:
             config.max_workers = args.max_workers
-          # Create workflow from config
+        if args.mode == "inference" and args.limit:
+            config.limit = args.limit
+
+        # Create workflow from config
         workflow = EvalWorkflow(config=config)
         
         # Set mode
@@ -409,6 +412,9 @@ Examples:
     execution_parent.add_argument("--max-workers", 
                                  type=int,
                                  help="Maximum parallel processes (overrides config)")
+    execution_parent.add_argument("--limit", 
+                            type=int,
+                            help="Limit number of samples processed (overrides config)")
     
     # Create subcommands
     subparsers = parser.add_subparsers(dest="command", help="Available commands")

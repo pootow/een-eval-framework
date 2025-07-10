@@ -73,7 +73,8 @@ class InferenceEngine:
         output_manager: Optional[OutputManager] = None,
         batch_size: int = 1,
         max_workers: int = 4,
-        resume: bool = False
+        resume: bool = False,
+        limit: Optional[int] = None
     ):
         self.models = models
         self.dataset = dataset
@@ -84,6 +85,7 @@ class InferenceEngine:
         self.batch_size = batch_size
         self.max_workers = max_workers
         self.resume = resume
+        self.limit = limit
         self.logger = logging.getLogger(__name__)
 
         # State tracking
@@ -249,7 +251,15 @@ class InferenceEngine:
                         existing_results.append(existing_result)
                         continue
                 all_samples.append((item, sample_idx))
+
+        if self.limit:
+            # Limit the number of samples processed
+            all_samples = all_samples[:self.limit]
+            self.logger.info(f"Limiting to {self.limit} samples for model {model.name}")
+
+        # update status with existing results
         self._update_status_after_batch(existing_results, status)
+
         # Create batches of samples
         batches = []
         for i in range(0, len(all_samples), self.batch_size):
