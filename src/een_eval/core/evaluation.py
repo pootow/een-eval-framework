@@ -8,11 +8,9 @@ for assessing model responses against ground truth.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Any, Callable, Optional
-import importlib.util
 import inspect
 import re
 import json
-from pathlib import Path
 
 from ..workflow.config import EvaluationMethodConfig
 from ..utils.module_loader import load_function_from_file, load_function_from_module

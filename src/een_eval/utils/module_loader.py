@@ -7,6 +7,7 @@ and other objects from external Python files and modules.
 
 import importlib
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Callable, Any, Dict, Optional, Union
 
@@ -39,11 +40,18 @@ def load_function_from_file(file_path: str, function_name: str) -> Callable:
         raise ImportError(f"Could not load module from {file_path}")
     
     module = importlib.util.module_from_spec(spec)
+    # Ensure the module directory is in sys.path to allow imports
+    module_dir = str(path.parent.resolve())
+    sys_path_backup = sys.path.copy()
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
     try:
         spec.loader.exec_module(module)
     except Exception as e:
         raise ImportError(f"Error executing module {file_path}: {e}")
-    
+    finally:
+        sys.path = sys_path_backup  # Restore sys.path
+
     if not hasattr(module, function_name):
         available_functions = [name for name in dir(module) if callable(getattr(module, name)) and not name.startswith('_')]
         raise AttributeError(
@@ -120,11 +128,18 @@ def load_object_from_file(file_path: str, object_name: str) -> Any:
         raise ImportError(f"Could not load module from {file_path}")
     
     module = importlib.util.module_from_spec(spec)
+    # Ensure the module directory is in sys.path to allow imports
+    module_dir = str(path.parent.resolve())
+    sys_path_backup = sys.path.copy()
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
     try:
         spec.loader.exec_module(module)
     except Exception as e:
         raise ImportError(f"Error executing module {file_path}: {e}")
-    
+    finally:
+        sys.path = sys_path_backup  # Restore sys.path
+
     if not hasattr(module, object_name):
         available_objects = [name for name in dir(module) if not name.startswith('_')]
         raise AttributeError(
