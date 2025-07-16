@@ -422,7 +422,7 @@ class VLLMModel(ModelInterface):
             # Test with a simple completion request to ensure the API is actually working
             import requests
             test_payload = {
-                "model": self.config.name,
+                "model": self.config.model_name,
                 "messages": [{"role": "user", "content": "/nothink\necho this word, and do not output anything else: model-ready."}],
                 "max_tokens": 20,
                 "temperature": 0.0
@@ -541,7 +541,7 @@ class LlamaCppModel(ModelInterface):
         
         # Build API parameters
         params = {
-            "model": self.config.name,
+            "model": self.config.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": merged_params.get("max_tokens", -1),
         }
@@ -608,7 +608,7 @@ class LlamaCppModel(ModelInterface):
             # Test with a simple completion request to ensure the API is actually working
             import requests
             test_payload = {
-                "model": self.config.name,
+                "model": self.config.model_name,
                 "messages": [{"role": "user", "content": "/nothink\necho this word, and do not output anything else: model-ready."}],
                 "max_tokens": 20,
                 "temperature": 0.0
@@ -628,6 +628,7 @@ class LlamaCppModel(ModelInterface):
         
         if self.is_available():
             self.client = openai.OpenAI(base_url=self.config.endpoint, api_key="DUMMY_API_KEY")
+            logger.info("Llama.cpp model is already running.")
             return
         
         # Check that models_volume is provided in docker config
