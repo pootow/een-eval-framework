@@ -277,6 +277,8 @@ class InferenceEngine:
             else:
                 status.processed_samples += 1
 
+        status.last_update = datetime.now()
+
         if self.output_manager:
             self.output_manager.save_status(status)
 

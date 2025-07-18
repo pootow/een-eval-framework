@@ -33,6 +33,7 @@ class WorkflowStatus:
     failed_samples: int = 0
     current_model: Optional[str] = None
     start_time: Optional[datetime] = None
+    last_update: Optional[datetime] = None
     errors: List[str] = field(default_factory=list)
     
     @property
@@ -50,6 +51,7 @@ class WorkflowStatus:
             "failed_samples": self.failed_samples,
             "current_model": self.current_model,
             "start_time": self.start_time.isoformat() if self.start_time else None,
+            "last_update": self.last_update.isoformat() if self.last_update else None,
             "errors": self.errors,
         }
 
